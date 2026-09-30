@@ -4847,7 +4847,7 @@ uint32_t MVKDevice::getMultiviewMetalPassCount(uint32_t viewMask) const {
 	if ( !viewMask ) { return 0; }
 	if ( !_physicalDevice->canUseInstancingForMultiview() ) {
 		// If we can't use instanced drawing for this, we'll have to unroll the render pass.
-		return __builtin_popcount(viewMask);
+		return mvkPopcount(viewMask);
 	}
 	uint32_t mask = viewMask;
 	uint32_t count;

@@ -73,9 +73,24 @@ option(MVK_BUILD_SHADER_CONVERTER_TOOL "If enabled, the MoltenVKShaderConverter 
 
 # Set default minimum C++ standard
 if(MOLTEN_VK_TOPLEVEL_PROJECT)
-	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CXX_STANDARD 20)
 	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 	set(CMAKE_CXX_EXTENSIONS OFF)
+
+	# Default to an optimized build when the caller doesn't specify one.
+	# A bare `cmake ..` otherwise builds unoptimized without NDEBUG.
+	if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+		set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+		set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
+	endif()
+
+	# Only export the Vulkan entry points (marked MVK_PUBLIC_SYMBOL), matching the Xcode build
+	# (GCC_SYMBOLS_PRIVATE_EXTERN). Hidden visibility avoids PLT indirection for internal calls.
+	set(CMAKE_C_VISIBILITY_PRESET hidden)
+	set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+	set(CMAKE_OBJC_VISIBILITY_PRESET hidden)
+	set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
+	set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 endif()
 
 ### Configuration

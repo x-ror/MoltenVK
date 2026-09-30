@@ -22,10 +22,13 @@
 
 #include "MVKEnvironment.h"
 #include <algorithm>
+#include <bit>
 #include <cassert>
+#include <climits>
+#include <cmath>
 #include <limits>
+#include <span>
 #include <string>
-#include <cassert>
 #include <simd/simd.h>
 #include <type_traits>
 
@@ -291,67 +294,26 @@ static constexpr uint64_t kMVKUndefinedLargeUInt64        =  kMVKUndefinedLargeP
 
 #pragma mark - Bit Manipulation
 
-#ifndef __has_builtin
-#define __has_builtin(x) 0
-#endif
-
-#if __has_builtin(__builtin_popcount)
-static constexpr uint32_t mvkPopcount(unsigned char x)      { return __builtin_popcount(x); }
-static constexpr uint32_t mvkPopcount(unsigned short x)     { return __builtin_popcount(x); }
-static constexpr uint32_t mvkPopcount(unsigned x)           { return __builtin_popcount(x); }
-static constexpr uint32_t mvkPopcount(unsigned long x)      { return __builtin_popcountl(x); }
-static constexpr uint32_t mvkPopcount(unsigned long long x) { return __builtin_popcountll(x); }
-template <typename T> static constexpr uint32_t mvkPopcount(T t) { return mvkPopcount(static_cast<std::make_unsigned_t<T>>(t)); }
-#else
+/** Returns the number of set bits in the integer. Signed inputs are counted as their unsigned representation. */
 template <typename T>
 static constexpr uint32_t mvkPopcount(T t) {
-	// From https://graphics.stanford.edu/~seander/bithacks.html
-	using U = std::make_unsigned_t<T>;
-	U val = t;
-	U allset = ~static_cast<U>(0);
-	U c0 = allset / 3;
-	U c1 = allset / 15 * 3;
-	U c2 = allset / 255;
-	val = val - ((val >> 1) & c0);
-	val = (val & c1) + ((val >> 2) & c1);
-	val = (val + (val >> 4)) & (c2 * 15);
-	return (val * c2) >> ((sizeof(U) - 1) * 8);
+	static_assert(std::is_integral_v<T>, "mvkPopcount requires an integer type");
+	return static_cast<uint32_t>(std::popcount(static_cast<std::make_unsigned_t<T>>(t)));
 }
-#endif
 
-#if __has_builtin(__builtin_clz)
-static constexpr uint32_t mvkCLZ(unsigned char x)      { return __builtin_clz(x) - (sizeof(int) - sizeof(char)) * 8; }
-static constexpr uint32_t mvkCLZ(unsigned short x)     { return __builtin_clz(x) - (sizeof(int) - sizeof(short)) * 8; }
-static constexpr uint32_t mvkCLZ(unsigned x)           { return __builtin_clz(x); }
-static constexpr uint32_t mvkCLZ(unsigned long x)      { return __builtin_clzl(x); }
-static constexpr uint32_t mvkCLZ(unsigned long long x) { return __builtin_clzll(x); }
-template <typename T> static constexpr uint32_t mvkCLZ(T t) { return mvkCLZ(static_cast<std::make_unsigned_t<T>>(t)); }
-#else
+/** Returns the number of leading zero bits, counted within the width of T. Returns the bit width for zero. */
 template <typename T>
 static constexpr uint32_t mvkCLZ(T t) {
-	for (unsigned i = 0; i < sizeof(T) * 8; i++)
-		if (t & (static_cast<T>(1) << (sizeof(T) * 8 - 1 - i)))
-			return i;
-	return sizeof(T) * 8;
+	static_assert(std::is_integral_v<T>, "mvkCLZ requires an integer type");
+	return static_cast<uint32_t>(std::countl_zero(static_cast<std::make_unsigned_t<T>>(t)));
 }
-#endif
 
-#if __has_builtin(__builtin_ctz)
-static constexpr uint32_t mvkCTZ(unsigned char x)      { return __builtin_ctz(x); }
-static constexpr uint32_t mvkCTZ(unsigned short x)     { return __builtin_ctz(x); }
-static constexpr uint32_t mvkCTZ(unsigned x)           { return __builtin_ctz(x); }
-static constexpr uint32_t mvkCTZ(unsigned long x)      { return __builtin_ctzl(x); }
-static constexpr uint32_t mvkCTZ(unsigned long long x) { return __builtin_ctzll(x); }
-template <typename T> static constexpr uint32_t mvkCTZ(T t) { return mvkCTZ(static_cast<std::make_unsigned_t<T>>(t)); }
-#else
+/** Returns the number of trailing zero bits, counted within the width of T. Returns the bit width for zero. */
 template <typename T>
 static constexpr uint32_t mvkCTZ(T t) {
-	for (unsigned i = 0; i < sizeof(T) * 8; i++)
-		if (t & (static_cast<T>(1) << i))
-			return i;
-	return sizeof(T) * 8;
+	static_assert(std::is_integral_v<T>, "mvkCTZ requires an integer type");
+	return static_cast<uint32_t>(std::countr_zero(static_cast<std::make_unsigned_t<T>>(t)));
 }
-#endif
 
 #pragma mark - Vulkan structure support functions
 
@@ -571,10 +533,14 @@ public:
 	constexpr Type& back() const { assert(_size); return _data[_size - 1]; }
 	constexpr MVKArrayRef() : MVKArrayRef(nullptr, 0) {}
 	constexpr MVKArrayRef(Type* d, size_t s) : _data(d), _size(s) {}
-	template <typename Other, std::enable_if_t<std::is_convertible_v<Other(*)[], Type(*)[]>, bool> = true>
+	template <typename Other> requires std::is_convertible_v<Other(*)[], Type(*)[]>
 	constexpr MVKArrayRef(MVKArrayRef<Other> other) : _data(other.data()), _size(other.size()) {}
 	template <size_t N>
 	constexpr MVKArrayRef(Type(&arr)[N]): _data(arr), _size(N) {}
+	template <typename Other, size_t Extent> requires std::is_convertible_v<Other(*)[], Type(*)[]>
+	constexpr MVKArrayRef(std::span<Other, Extent> s) : _data(s.data()), _size(s.size()) {}
+	constexpr operator std::span<Type>() const { return std::span<Type>(_data, _size); }
+	constexpr std::span<Type> span() const { return std::span<Type>(_data, _size); }
 
 protected:
 	Type* _data;
@@ -691,7 +657,7 @@ static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
  */
 template<typename T>
 static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) {
-	if ( !pV2 || !pV2 ) { return false; }				// Bad pointers
+	if ( !pV1 || !pV2 ) { return false; }				// Bad pointers
 	if (pV1 == pV2) { return true; }					// Same object
 	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { return *pV1 == *pV2; } }  // Fast compare of a single primitive
 	return memcmp(pV1, pV2, sizeof(T) * count) == 0;	// Memory compare of complex content or array
