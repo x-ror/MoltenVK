@@ -97,17 +97,9 @@ MVKLayerManager::MVKLayerManager() {
 	_layers.emplace_back();
 }
 
-static mutex _lock;
-static MVKLayerManager* _globalManager = VK_NULL_HANDLE;
-
-// Test first and lock only if we need to create it.
-// Test again after lock established to ensure it wasn't added by another thread between test and lock.
+// The function-local static makes the one-time creation thread-safe.
+// The global manager is intentionally never deleted.
 MVKLayerManager* MVKLayerManager::globalManager() {
-	if ( !_globalManager ) {
-		lock_guard<mutex> lock(_lock);
-		if ( !_globalManager ) {
-			_globalManager = new MVKLayerManager();
-		}
-	}
+	static MVKLayerManager* _globalManager = new MVKLayerManager();
 	return _globalManager;
 }

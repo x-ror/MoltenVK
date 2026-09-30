@@ -194,7 +194,7 @@ public:
     }
   }
 
-  MVKSmallVectorImpl( MVKSmallVectorImpl &&a ) : alc{ std::move( a.alc ) }
+  MVKSmallVectorImpl( MVKSmallVectorImpl &&a ) noexcept : alc{ std::move( a.alc ) }
   {
   }
 
@@ -217,12 +217,9 @@ public:
   {
   }
 
-  template<typename U>
-  MVKSmallVectorImpl& operator=( const U &a )
+  MVKSmallVectorImpl& operator=( const MVKSmallVectorImpl &a )
   {
-    static_assert( std::is_base_of<MVKSmallVectorImpl<Type>, U>::value, "argument is not of type MVKSmallVectorImpl" );
-
-    if( this != reinterpret_cast<const MVKSmallVectorImpl<Type>*>( &a ) )
+    if( this != &a )
     {
       const auto n = a.size();
 
@@ -235,18 +232,16 @@ public:
       }
       else
       {
+        alc.template destruct_all<Type>();
+
         if( n > capacity() )
         {
           vector_ReAllocate( n );
         }
-        else
-        {
-          alc.template destruct_all<Type>();
-        }
 
         for( size_t i = 0; i < n; ++i )
         {
-          alc.construct( &alc.ptr[i], a[i] );
+          alc.construct( &alc.ptr[i], a.alc.ptr[i] );
         }
 
         alc.num_elements_used = n;
@@ -256,7 +251,7 @@ public:
     return *this;
   }
 
-  MVKSmallVectorImpl& operator=( MVKSmallVectorImpl &&a )
+  MVKSmallVectorImpl& operator=( MVKSmallVectorImpl &&a ) noexcept
   {
     alc.swap( a.alc );
     return *this;
@@ -286,7 +281,7 @@ public:
     return false;
   }
 
-  void swap( MVKSmallVectorImpl &a )
+  void swap( MVKSmallVectorImpl &a ) noexcept
   {
     alc.swap( a.alc );
   }
@@ -639,7 +634,7 @@ public:
     }
   }
 
-  MVKSmallVectorImpl( MVKSmallVectorImpl &&a ) : alc{ std::move( a.alc ) }
+  MVKSmallVectorImpl( MVKSmallVectorImpl &&a ) noexcept : alc{ std::move( a.alc ) }
   {
   }
 
@@ -662,42 +657,29 @@ public:
   {
   }
 
-  template<typename U>
-  MVKSmallVectorImpl& operator=( const U &a )
+  MVKSmallVectorImpl& operator=( const MVKSmallVectorImpl &a )
   {
-    static_assert( std::is_base_of<MVKSmallVectorImpl<U>, U>::value, "argument is not of type MVKSmallVectorImpl" );
-
-    if ( this != reinterpret_cast< const MVKSmallVectorImpl<Type>* >( &a ) )
+    if ( this != &a )
     {
       const auto n = a.size();
 
-      if ( alc.num_elements_used == n )
+      if ( n > capacity() )
       {
-        for ( size_t i = 0; i < n; ++i )
-        {
-          alc.ptr[i] = a.alc.ptr[i];
-        }
+        vector_ReAllocate( n );
       }
-      else
+
+      for ( size_t i = 0; i < n; ++i )
       {
-        if ( n > capacity() )
-        {
-          vector_ReAllocate( n );
-        }
-
-        for ( size_t i = 0; i < n; ++i )
-        {
-          alc.ptr[i] = a[i];
-        }
-
-        alc.num_elements_used = n;
+        alc.ptr[i] = a.alc.ptr[i];
       }
+
+      alc.num_elements_used = n;
     }
 
     return *this;
   }
 
-  MVKSmallVectorImpl& operator=( MVKSmallVectorImpl &&a )
+  MVKSmallVectorImpl& operator=( MVKSmallVectorImpl &&a ) noexcept
   {
     alc.swap( a.alc );
     return *this;
@@ -727,7 +709,7 @@ public:
     return false;
   }
 
-  void swap( MVKSmallVectorImpl &a )
+  void swap( MVKSmallVectorImpl &a ) noexcept
   {
     alc.swap( a.alc );
   }
@@ -736,7 +718,7 @@ public:
   iterator end()          { return iterator( alc.num_elements_used, *this ); }
 
   reverse_iterator rbegin()       { return reverse_iterator( end() ); }
-  reverse_iterator rend()         { return reverse_iterator( rbegin() ); }
+  reverse_iterator rend()         { return reverse_iterator( begin() ); }
 
   const MVKArrayRef<Type*> contents() const { return MVKArrayRef<Type*>(data(), size()); }
         MVKArrayRef<Type*> contents()       { return MVKArrayRef<Type*>(data(), size()); }
