@@ -159,6 +159,14 @@ void MVKPipelineLayout::populateShaderConversionConfig(SPIRVToMSLConversionConfi
 	shaderConfig.discreteDescriptorSets.clear();
 	shaderConfig.dynamicBufferDescriptors.clear();
 
+	// Reserve for the largest number of bindings this can add: every descriptor binding may
+	// add up to two entries per shader stage, plus the push constant and size buffers.
+	size_t maxBindingCnt = kMVKShaderStageCount;
+	for (MVKDescriptorSetLayout* layout : _descriptorSetLayouts) {
+		maxBindingCnt += (layout->bindings().size() * 2 + 1) * kMVKShaderStageCount;
+	}
+	shaderConfig.resourceBindings.reserve(maxBindingCnt);
+
 	// Add any resource bindings used by push-constants.
 	for (uint32_t i = 0; i < kMVKShaderStageCount; i++) {
 		auto stage = static_cast<MVKShaderStage>(i);
@@ -1507,9 +1515,9 @@ bool MVKGraphicsPipeline::addVertexShaderToPipeline(MTLComputePipelineDescriptor
 		func = getMTLFunction(shaderConfig, pVertexSS, pVertexFB, _vertexModule, "Vertex");
 		if ( !func.getMTLFunction() ) { return false; }
 
-		pVtxFunctions[i] = func;
+		pVtxFunctions[i] = std::move(func);
 
-		auto& funcRslts = func.shaderConversionResults;
+		auto& funcRslts = pVtxFunctions[i].shaderConversionResults;
 		populateResourceUsage(_stageResources[kMVKShaderStageVertex], shaderConfig, funcRslts, spv::ExecutionModelVertex);
 	}
 
@@ -2149,6 +2157,7 @@ void MVKGraphicsPipeline::addVertexInputToShaderConversionConfig(SPIRVToMSLConve
     // Set the shader conversion config vertex attribute information
     shaderConfig.shaderInputs.clear();
     uint32_t vaCnt = pCreateInfo->pVertexInputState->vertexAttributeDescriptionCount;
+    shaderConfig.shaderInputs.reserve(vaCnt);
     for (uint32_t vaIdx = 0; vaIdx < vaCnt; vaIdx++) {
         const VkVertexInputAttributeDescription* pVKVA = &pCreateInfo->pVertexInputState->pVertexAttributeDescriptions[vaIdx];
 
@@ -2503,12 +2512,9 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 
 // Returns a shader library cache for the specified shader module key, creating it if necessary.
 MVKShaderLibraryCache* MVKPipelineCache::getShaderLibraryCache(MVKShaderModuleKey smKey) {
-	MVKShaderLibraryCache* slCache = _shaderCache[smKey];
-	if ( !slCache ) {
-		slCache = new MVKShaderLibraryCache(this);
-		_shaderCache[smKey] = slCache;
-	}
-	return slCache;
+	auto [iter, wasInserted] = _shaderCache.try_emplace(smKey, nullptr);
+	if (wasInserted) { iter->second = new MVKShaderLibraryCache(this); }
+	return iter->second;
 }
 
 
@@ -2704,7 +2710,7 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					// Add the shader library to the staging cache. The MTLLibrary is compiled
 					// on first use, so creating the cache does not compile every entry up front.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL, true);
+					slCache->addShaderLibrary(std::move(shaderConversionConfig), std::move(resultInfo), std::move(compressedMSL), true);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
 
 					break;

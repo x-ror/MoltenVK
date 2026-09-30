@@ -42,6 +42,7 @@ Released TBD
 - Fix `MVKSmallVector` copy assignment not compiling, reverse iteration over pointer vectors being empty, and mark its move operations `noexcept`.
 - Fix `vkCmdBeginRenderPass()` with two clear values being recorded into the wrong command pool.
 - Fix an uninitialized descriptor pool free-list size, a missing `break` when reading `VkExportMetalObjectCreateInfoEXT` during memory allocation, stale `pNext` pointers kept in recorded dynamic rendering attachments, a leaked Metal command buffer label per queue, and a missing `default` in `mvkMTLIndexTypeSizeInBytes()`.
+- Reduce pipeline creation and `VkPipelineCache` loading costs: copy the shader conversion configuration only on a cache miss, move cache entries into place instead of copying them, compare configurations index-aligned before scanning, index Metal function constants once per library, and skip macro specialization for shaders that use none.
 
 
 
