@@ -528,6 +528,7 @@ public:
 protected:
     void addActivatedQueries(MVKQueryPool* pQueryPool, uint32_t query, uint32_t queryCount);
     void finishQueries();
+	void returnTempMTLBuffersOnCompletion();
 	void setSubpass(MVKCommand* passCmd, VkSubpassContents subpassContents, uint32_t subpassIndex, MVKCommandUse cmdUse);
 	void clearRenderArea(MVKCommandUse cmdUse);
 	bool hasMoreMultiviewPasses();
@@ -550,6 +551,7 @@ protected:
 	MVKCommand* _lastMultiviewPassCmd;
     MVKActivatedQueries* _pActivatedQueries;
 	MVKSmallVector<GPUCounterQuery, 16> _timestampStageCounterQueries;
+	MVKSmallVector<MVKMTLBufferAllocation*, 16> _tempMTLBufferAllocations;
 	MVKSmallVector<VkClearValue, kMVKDefaultAttachmentCount> _clearValues;
 	MVKSmallVector<MVKImageView*, kMVKDefaultAttachmentCount> _attachments;
 	id<MTLComputeCommandEncoder> _mtlComputeEncoder;

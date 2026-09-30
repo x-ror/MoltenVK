@@ -17,6 +17,7 @@
  */
 
 #include "MVKMTLBufferAllocation.h"
+#include <functional>
 
 
 #pragma mark -
@@ -81,6 +82,27 @@ void MVKMTLBufferAllocationPool::returnAllocation(MVKMTLBufferAllocation* ba) {
     } else {
         returnAllocationUnlocked(ba);
     }
+}
+
+void MVKMTLBufferAllocationPool::returnAllocations(MVKArrayRef<MVKMTLBufferAllocation*> allocations) {
+	std::sort(allocations.begin(), allocations.end(), [](auto* a, auto* b) { return std::less<>()(a->_pool, b->_pool); });
+
+	size_t count = allocations.size();
+	size_t start = 0;
+	while (start < count) {
+		MVKMTLBufferAllocationPool* pool = allocations[start]->_pool;
+		size_t end = start + 1;
+		while (end < count && allocations[end]->_pool == pool) { end++; }
+
+		auto returnRange = [&]() { for (size_t i = start; i < end; i++) { pool->returnAllocationUnlocked(allocations[i]); } };
+		if (pool->_isThreadSafe) {
+			std::lock_guard<std::mutex> lock(pool->_lock);
+			returnRange();
+		} else {
+			returnRange();
+		}
+		start = end;
+	}
 }
 
 MVKMTLBufferAllocationPool::MVKMTLBufferAllocationPool(MVKDevice* device, NSUInteger allocationLength, bool makeThreadSafe,
