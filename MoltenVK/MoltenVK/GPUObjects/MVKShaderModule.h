@@ -148,8 +148,13 @@ protected:
 	MVKMTLFunction getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 								  VkPipelineCreationFeedback* pShaderFeedback,
 								  MVKShaderModule* shaderModule);
+	MVKShaderLibrary* getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo);
+	bool ensureBaseMTLFunction(VkPipelineCreationFeedback* pShaderFeedback, MVKShaderModule* shaderModule);
+	id<MTLFunction> getSpecializedMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
+											  VkPipelineCreationFeedback* pShaderFeedback,
+											  MVKShaderModule* shaderModule);
+	void clearFunctionCache();
 	void handleCompilationError(NSError* err, const char* opDesc);
-    MTLFunctionConstant* getFunctionConstant(NSArray<MTLFunctionConstant*>* mtlFCs, NSUInteger mtlFCID);
 	void compileLibrary(const std::string& msl,
 						const std::vector<std::pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef = nullptr);
 	void compressMSL(const std::string& msl);
@@ -166,6 +171,19 @@ protected:
 	/** Can only be populated when _maySpecializeWithMacro is true. Guarded by _variantsLock. */
 	std::map<std::vector<std::pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary *> _specializationVariants;
 	std::mutex _variantsLock;
+
+	/**
+	 * MTLFunctions retrieved from this library, guarded by _functionsLock.
+	 * The base function is the unspecialized entry point, retrieved once. It is the result
+	 * for every pipeline when the shader has no function constants, and otherwise provides
+	 * the function constants. Specialized functions are cached by the values of the
+	 * function constants that the pipeline's specialization info supplies.
+	 */
+	id<MTLFunction> _baseMTLFunction = nil;
+	NSArray<MTLFunctionConstant*>* _mtlFunctionConstants = nil;
+	bool _isBaseMTLFunctionRetrieved = false;
+	std::map<std::vector<uint8_t>, id<MTLFunction>> _specializedMTLFunctions;
+	std::mutex _functionsLock;
 };
 
 
