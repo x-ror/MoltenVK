@@ -137,7 +137,10 @@ public:
     }
   }
 
+  // Copies from any container with size() and operator[]. The constraint keeps an integer count,
+  // such as a uint32_t, from matching this exactly and taking priority over the size constructor.
   template<typename U>
+    requires requires( const U &u ) { u.size(); u[0]; }
   MVKSmallVectorImpl( const U &a )
   {
     const size_t n = a.size();
