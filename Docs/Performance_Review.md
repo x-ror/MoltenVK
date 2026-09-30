@@ -25,6 +25,7 @@ pool) or by adding a non-inserting `find()` to `MVKInflectionMap`, because an un
 `find()` racing a locked insert into a `std::unordered_map` is still a data race. 0.11 is left
 unchanged: the same code is in upstream MoltenVK, adding the `break` changes which layered
 render passes get `renderTargetArrayLength` set, and that needs a CTS run on real hardware.
+Section 8 later simplified the check without changing its behavior, and documented it.
 
 | # | Where | Problem | Fix | Impact / Risk |
 |---|---|---|---|---|
@@ -482,7 +483,7 @@ These are larger than a local edit and are offered for discussion, with the trad
 **Status:** items 2, 3 and 6 were delivered by 3.2, 1.1 and section 5. For item 4, 1.11 already
 hoisted the first view index and removed the `std::function` from the rendering attachment
 iterator. The remaining per-pass check in `beginMetalRenderPass()` now stops at the first 3D
-color attachment. That check was found to treat any 3D attachment as a mix of 3D and 2D,
+color attachment. As 0.11 found, that check treats any 3D attachment as a mix of 3D and 2D,
 because its 3D case falls through to the 2D case. The rewrite keeps that behavior and
 documents it; whether an all-3D pass should set `renderTargetArrayLength` to 1 is a
 maintainer decision. For item 5, each extension now passes its minimum OS versions from
@@ -547,6 +548,34 @@ here. The staged plan below keeps each step shippable on its own.
 ---
 
 ## 9. Suggested execution order
+
+**Status:** the branch follows this order, with one commit per section. The benchmarks and CTS
+runs that the order calls for need a Mac, so none has been run yet.
+`Demos/Benchmarks/verify_review_stages.sh` builds every commit below, runs the `draw`,
+`pipelines`, `cache` and `launch` scenarios against all of them, and runs a CTS case list
+against each. It then reports the tests that fail at a stage but passed at the stage before.
+Its default case list, `review_cts_caselist.txt`, covers the areas the review changed; step 5
+also asks for the full mustpass list.
+
+| Step | Commit | What to check |
+|---|---|---|
+| Base | `d84f1a3` | The code before any change. |
+| 1 | `dc3327c` | Section 0. CTS: no new failures. |
+| 2 | `a9112ca` | Section 1. `draw` scenario, all patterns. |
+| 3 | `b5c67d1` | Section 2. `pipelines`, `cache` and `launch` scenarios. |
+| 4 | `a192c4a` | Section 3. Memory per command pool and resource, for example with `vmmap` or Instruments Allocations. |
+| 5 | `2f19fa6` | Section 4. The full CTS. |
+| 6 | `4586a88`, `1fd53ed` | Sections 5 and 6. CTS on tessellation, draw and transfer, since section 6 moves the direct tessellated draw into shared helpers. |
+| 7 | `517b4f3`, `207daf0` | Sections 7 and 8. CTS on copy, clear, resolve, multiview and device creation. |
+
+These items were left for a maintainer decision:
+
+- 0.11: whether a render pass whose color attachments are all 3D should set
+  `renderTargetArrayLength` to 1. Section 8 simplified the check but kept its behavior.
+- 2.5: the pipeline cache format change, which needs a `pipelineCacheUUID` bump.
+- Section 6: the secondary command buffer input attachment indices, which are stored but never
+  applied.
+- Section 8 item 1: the command arena, after the `draw` profile shows it is worth doing.
 
 1. Section 0 correctness fixes (all small; 0.1 and 0.2 first).
 2. 1.1 config caching, 1.6 `<bit>` helpers, 1.7 `getStages`, 1.4 queue changes, 1.3 shared
