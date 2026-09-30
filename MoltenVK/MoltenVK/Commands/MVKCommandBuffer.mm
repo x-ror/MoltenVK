@@ -807,16 +807,12 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
     mtlRPDesc.renderTargetHeight = max(min(raFullExtent.height, (fbExtent.height ? fbExtent.height : raFullExtent.height)), 1u);
     if (_canUseLayeredRendering) {
         uint32_t renderTargetArrayLength;
-        bool found3D = false, found2D = false;
-        for (uint32_t i = 0; i < 8; i++) {
-            id<MTLTexture> mtlTex = mtlRPDesc.colorAttachments[i].texture;
-            if (mtlTex == nil) { continue; }
-            switch (mtlTex.textureType) {
-                case MTLTextureType3D:
-                    found3D = true;
-                default:
-                    found2D = true;
-            }
+        // Any 3D color attachment counts as a mix of 3D and 2D attachments. This matches the previous
+        // check, whose 3D case fell through to also set its 2D flag, so an all-3D pass is treated as mixed.
+        bool hasMixed3D2D = false;
+        for (uint32_t caIdx = 0; caIdx < kMVKMaxColorAttachmentCount && !hasMixed3D2D; caIdx++) {
+            id<MTLTexture> mtlTex = mtlRPDesc.colorAttachments[caIdx].texture;
+            hasMixed3D2D = mtlTex && mtlTex.textureType == MTLTextureType3D;
         }
 
         if (getSubpass()->isMultiview()) {
@@ -827,7 +823,7 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 			renderTargetArrayLength = getFramebufferLayerCount();
         }
         // Metal does not allow layered render passes where some RTs are 3D and others are 2D.
-        if (!(found3D && found2D) || renderTargetArrayLength > 1) {
+        if ( !hasMixed3D2D || renderTargetArrayLength > 1) {
             mtlRPDesc.renderTargetArrayLength = renderTargetArrayLength;
         }
     }

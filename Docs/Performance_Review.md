@@ -479,6 +479,35 @@ Outside the CPU focus of this review but noticed in
 
 These are larger than a local edit and are offered for discussion, with the trade-off stated.
 
+**Status:** items 2, 3 and 6 were delivered by 3.2, 1.1 and section 5. For item 4, 1.11 already
+hoisted the first view index and removed the `std::function` from the rendering attachment
+iterator. The remaining per-pass check in `beginMetalRenderPass()` now stops at the first 3D
+color attachment. That check was found to treat any 3D attachment as a mix of 3D and 2D,
+because its 3D case falls through to the 2D case. The rewrite keeps that behavior and
+documents it; whether an all-3D pass should set `renderTargetArrayLength` to 1 is a
+maintainer decision. For item 5, each extension now passes its minimum OS versions from
+`MVKExtensions.def` straight to the platform check, so building an extension list is linear
+instead of quadratic. The old and new lists were compared across advertise flags, OS versions
+and enable modes, and matched in all 180 cases. The `constexpr` pixel format table is not
+done: it restructures about 28 KB of startup-only data and needs a Metal device to verify.
+Item 1 is not implemented. It rewrites every `MVKCmd*` class and cannot be built or measured
+here. The staged plan below keeps each step shippable on its own.
+
+- **Measure first.** Record the `draw` scenario in `Demos/Benchmarks` with Instruments, and
+  split the time between `encode()`, the list walk and `releaseCommands()`. If the list walk
+  and the pool returns are under a few percent of encoding, stop here.
+- **Keep pooled capacity.** Commands are reused from type pools, which keeps the capacity of
+  their `MVKSmallVector` members across recordings. An arena must keep that, for example by
+  storing variable-size payloads in the same arena and resetting it without freeing.
+- **Step 1, allocation.** Placement-construct commands in a per-command-buffer arena, and keep
+  the class hierarchy and the virtual `encode()`. Reset destroys the commands in order and
+  rewinds the arena. This makes replay cache-linear and removes the per-type pools.
+- **Step 2, payloads.** Move the `MVKSmallVector` members of the multi-region commands into
+  arena spans, so the commands become trivially destructible and reset is O(1).
+- **Step 3, dispatch.** Replace the virtual `encode()` with an opcode switch generated from
+  `MVKCommandTypePools.def`. Only take this step if the profile shows the indirect call
+  matters.
+
 1. **Command stream as a contiguous arena instead of a linked list of pooled objects.**
    Every recorded command is a separately heap-allocated (then pooled) object with a vtable,
    an intrusive `_next` pointer and a virtual `getTypePool()` used on release

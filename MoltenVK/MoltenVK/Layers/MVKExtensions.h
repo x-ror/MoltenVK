@@ -30,7 +30,7 @@ struct MVKExtension {
 	bool enabled = false;
 	VkExtensionProperties* pProperties;
 
-	MVKExtension(VkExtensionProperties* pProperties, bool enableForPlatform = false);
+	MVKExtension(VkExtensionProperties* pProperties, bool isEnabled = false) : enabled(isEnabled), pProperties(pProperties) {}
 };
 
 
