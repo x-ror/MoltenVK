@@ -26,6 +26,13 @@ METRICS = {
 	"first_pipeline_ms": True,
 	"remaining_pipelines_ms": True,
 	"total_ms": True,
+	"save_cache_ms": True,
+	"spirv_to_msl_ms": True,
+	"msl_compile_ms": True,
+	"library_from_cache_ms": True,
+	"function_ms": True,
+	"specialization_ms": True,
+	"pipeline_compile_ms": True,
 }
 
 def load(outdir, label):

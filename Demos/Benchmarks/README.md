@@ -14,6 +14,7 @@ to build it.
 | `draw` | `vkQueueSubmit()` of one command buffer with many small draws. With the default `MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=0`, MoltenVK encodes Metal commands inside `vkQueueSubmit()`, so this is the encoding cost. | `MVKCommandEncoder`, `MVKCommandEncoderState` |
 | `pipelines` | Wall-clock time to create many graphics pipelines from 1..N threads that share one `VkPipelineCache`, and the speedup over the first thread count. | `MVKPipelineCache`, `MVKShaderLibraryCache`, `MVKShaderLibrary` |
 | `cache` | `vkCreatePipelineCache()` with a populated cache blob, and creating the pipelines from it. | `MVKPipelineCache::readData()` |
+| `launch` | Creating one batch of pipelines as an app does at launch, optionally from a `VkPipelineCache` saved to a file by an earlier process, with MoltenVK's breakdown of the compilation steps. Not part of `all`. Run by `launch_benchmarks.sh`. | `MVKPipelineCache`, `MVKShaderLibrary`, Metal's shader cache |
 
 The `draw` scenario records the command buffer with three patterns:
 
@@ -110,12 +111,41 @@ libraries. Otherwise it is labeled `noise`.
 --threads LIST      Thread counts for the pipelines scenario (default 1,2,4,8)
 --mode MODE         unique, spec or same (default unique)
 --no-cache          Create pipelines without a VkPipelineCache
+--seed N            Generate the same shaders on every run from N (1..8000000). Default: random
+--cache-file PATH   launch: load the VkPipelineCache from PATH if it exists, and save it there afterwards
 ```
 
 MoltenVK's own configuration applies as usual. For example, `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0`
 measures the per-slot binding mode, and `MVK_CONFIG_PERFORMANCE_TRACKING=1` with
 `MVK_CONFIG_ACTIVITY_PERFORMANCE_LOGGING_STYLE=1` logs MoltenVK's internal timings, such as
 `commandBufferEncoding` and `mslCompile`.
+
+### Launch times
+
+Metal keeps an on-disk cache of compiled shaders per process, so the second launch of an app
+compiles much less than the first. `launch_benchmarks.sh` measures this, running every phase in its
+own process, with new shaders for every run:
+
+```
+./launch_benchmarks.sh -n 3 -- --pipelines 64 --threads 8 main=../mvk-main/Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib
+```
+
+| Phase | Launch |
+|---|---|
+| `cold` | first launch: nothing cached |
+| `syscache` | second launch: Metal's shader cache is warm, no `VkPipelineCache` |
+| `vkcache` | restores a `VkPipelineCache` saved by an earlier launch, Metal's shader cache is warm |
+| `nosys` | as `vkcache`, after deleting Metal's shader cache for `mvkbench` |
+
+The phase is appended to the variant in the summary, for example `unique_t8_vkcache`. With MoltenVK,
+the `launch` scenario turns on `MVK_CONFIG_PERFORMANCE_TRACKING` and reports MoltenVK's time in each
+compilation step: `spirv_to_msl_ms`, `msl_compile_ms` (Metal front end, MSL to `MTLLibrary`) and
+`pipeline_compile_ms` (Metal back end, pipeline state). These are summed over the threads, so they
+can exceed `wall_ms`.
+
+The script looks for Metal's shader cache for `mvkbench` under `$(getconf DARWIN_USER_CACHE_DIR)`.
+If it does not find it, it skips the `nosys` phase and says so. Set `METAL_CACHE_DIRS` to the
+directories to delete in that case.
 
 ## Getting reliable numbers
 
