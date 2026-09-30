@@ -46,7 +46,7 @@ MVKVulkanAPIObject* MVKCommandEncodingPool::getVulkanAPIObject() { return _comma
 	auto rez = rezAccess;															\
 	if (rez) { return rez; }														\
 																					\
-	unique_lock<shared_mutex> lock(_lock);											\
+	lock_guard<MVKUnfairLock> lock(_lock);											\
 	rez = rezAccess;																\
 	if (rez) { return rez; }														\
 																					\
@@ -54,17 +54,11 @@ MVKVulkanAPIObject* MVKCommandEncodingPool::getVulkanAPIObject() { return _comma
 	rezAccess = rez;																\
 	return rez
 
-// Same three-step pattern for resources held in a map. Looking up a map entry with operator[]
-// inserts on a miss and may rehash, so Step 1 must hold the lock in shared mode and use find(),
-// and Step 3 takes the lock exclusively to insert.
+// For resources held in a map. Looking up a map entry with operator[] inserts on a miss and may
+// rehash, so the lookup must be made under the lock. An unfair lock is cheaper than a reader-writer
+// lock on Darwin, and the encoding pool is rarely contended, so the whole access takes it once.
 #define MVK_ENC_REZ_ACCESS_MAP(rezMap, rezKey, rezFactoryFunc)						\
-	{																				\
-		shared_lock<shared_mutex> readLock(_lock);									\
-		auto iter = rezMap.find(rezKey);											\
-		if (iter != rezMap.end() && iter->second) { return iter->second; }			\
-	}																				\
-																					\
-	unique_lock<shared_mutex> lock(_lock);											\
+	lock_guard<MVKUnfairLock> lock(_lock);											\
 	auto& rez = rezMap[rezKey];														\
 	if (rez) { return rez; }														\
 																					\
@@ -193,7 +187,7 @@ id<MTLComputePipelineState> MVKCommandEncodingPool::getConvertUint8IndicesMTLCom
 }
 
 void MVKCommandEncodingPool::clear() {
-	unique_lock<shared_mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 	destroyMetalResources();
 }
 
