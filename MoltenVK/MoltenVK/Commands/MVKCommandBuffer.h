@@ -53,7 +53,7 @@ struct BarrierFenceSlots {
 };
 
 /** Context for tracking information across multiple encodings. */
-typedef struct MVKCommandEncodingContext {
+struct MVKCommandEncodingContext {
 	uint32_t firstVisibilityResultOffsetInRenderPass = 0;
 	MVKVisibilityBuffer visibilityResultBuffer;
 	BarrierFenceSlots fenceSlots;
@@ -68,14 +68,14 @@ typedef struct MVKCommandEncodingContext {
 private:
 	MVKRenderPass* _renderPass = nullptr;
 	MVKFramebuffer* _framebuffer = nullptr;
-} MVKCommandEncodingContext;
+};
 
 
 #pragma mark -
 #pragma mark MVKCurrentSubpassInfo
 
 /** Tracks current render subpass information. */
-typedef struct MVKCurrentSubpassInfo {
+struct MVKCurrentSubpassInfo {
 	MVKRenderPass* renderpass;
 	uint32_t subpassIndex;
 	uint32_t subpassViewMask;
@@ -86,7 +86,7 @@ typedef struct MVKCurrentSubpassInfo {
 
 private:
 	void updateViewMask();
-} MVKCurrentSubpassInfo;
+};
 
 
 #pragma mark -
@@ -488,16 +488,16 @@ public:
 #pragma mark Dynamic encoding state accessed directly
 
 	/** Context for tracking information across multiple encodings. */
-	MVKCommandEncodingContext* _pEncodingContext;
+	MVKCommandEncodingContext* _pEncodingContext = nullptr;
 
 	/** The command buffer whose commands are being encoded. */
 	MVKCommandBuffer* _cmdBuffer;
 
 	/** The current Metal command buffer. */
-	id<MTLCommandBuffer> _mtlCmdBuffer;
+	id<MTLCommandBuffer> _mtlCmdBuffer = nil;
 
 	/** The current Metal render encoder. */
-	id<MTLRenderCommandEncoder> _mtlRenderEncoder;
+	id<MTLRenderCommandEncoder> _mtlRenderEncoder = nil;
 
 	/** Tracks the state of command encoding. */
 	MVKCommandEncoderState _state;
@@ -505,14 +505,11 @@ public:
 	/** Tracks the occlusion query state of the encoder. */
 	MVKOcclusionQueryCommandEncoderState _occlusionQueryState;
 
-    /** The size of the threadgroup for the compute shader. */
-    MTLSize _mtlThreadgroupSize;
-
 	/** Indicates whether the current render subpass is able to render to an array (layered) framebuffer. */
-	bool _canUseLayeredRendering;
+	bool _canUseLayeredRendering = false;
 
 	/** Indicates whether the current draw is an indexed draw. */
-	bool _isIndexedDraw;
+	bool _isIndexedDraw = false;
 
 	/**
 	 * Returns whether commands are encoded to Metal as they are recorded, rather than when the
@@ -548,31 +545,30 @@ protected:
 	template<typename T> void endMetalEncoding(T& mtlEnc);
 	id<MTLFence> getBarrierStageFence(MVKBarrierStage stage);
 
-	typedef struct GPUCounterQuery {
+	struct GPUCounterQuery {
 		MVKGPUCounterQueryPool* queryPool = nullptr;
 		uint32_t query = 0;
-	} GPUCounterQuery;
+	};
 
-	VkRect2D _renderArea;
-	MVKCommand* _lastMultiviewPassCmd;
-    MVKActivatedQueries* _pActivatedQueries;
+	VkRect2D _renderArea = {};
+	MVKCommand* _lastMultiviewPassCmd = nullptr;
+	MVKActivatedQueries* _pActivatedQueries = nullptr;
 	MVKSmallVector<GPUCounterQuery, 16> _timestampStageCounterQueries;
 	MVKSmallVector<MVKMTLBufferAllocation*, 16> _tempMTLBufferAllocations;
 	MVKSmallVector<VkClearValue, kMVKDefaultAttachmentCount> _clearValues;
 	MVKSmallVector<MVKImageView*, kMVKDefaultAttachmentCount> _attachments;
-	id<MTLComputeCommandEncoder> _mtlComputeEncoder;
-	id<MTLBlitCommandEncoder> _mtlBlitEncoder;
-	id<MTLFence> _stageCountersMTLFence;
+	id<MTLComputeCommandEncoder> _mtlComputeEncoder = nil;
+	id<MTLBlitCommandEncoder> _mtlBlitEncoder = nil;
+	id<MTLFence> _stageCountersMTLFence = nil;
 	MVKPrefillMetalCommandBuffersStyle _prefillStyle;
-	VkSubpassContents _subpassContents;
-	uint32_t _renderSubpassIndex;
-	uint32_t _multiviewPassIndex;
-    uint32_t _flushCount;
-	MVKCommandUse _mtlComputeEncoderUse;
-	uint32_t _mtlComputeEncoderStages;
-	MVKCommandUse _mtlBlitEncoderUse;
-	bool _isRenderingEntireAttachment;
-	bool _hasMTLRenderEncoderVisibilityResultBuffer;
+	VkSubpassContents _subpassContents = VK_SUBPASS_CONTENTS_INLINE;
+	uint32_t _renderSubpassIndex = 0;
+	uint32_t _multiviewPassIndex = 0;
+	MVKCommandUse _mtlComputeEncoderUse = kMVKCommandUseNone;
+	uint32_t _mtlComputeEncoderStages = 0;
+	MVKCommandUse _mtlBlitEncoderUse = kMVKCommandUseNone;
+	bool _isRenderingEntireAttachment = false;
+	bool _hasMTLRenderEncoderVisibilityResultBuffer = false;
 };
 
 

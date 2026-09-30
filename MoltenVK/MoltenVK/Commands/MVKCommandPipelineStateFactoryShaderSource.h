@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "MVKDevice.h"
 
 #import <Foundation/Foundation.h>

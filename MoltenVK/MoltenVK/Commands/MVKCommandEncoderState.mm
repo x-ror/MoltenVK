@@ -422,13 +422,6 @@ static void bindImmediateData(id<MTLCommandEncoder> encoder,
 	bindImmediateData(encoder, mvkEncoder, reinterpret_cast<const uint8_t*>(data.data()), data.byteSize(), idx, binder);
 }
 
-/** Updates a value at the given index in the given vector, resizing if needed. */
-template<class V>
-static void updateImplicitBuffer(V &contents, uint32_t index, uint32_t value) {
-	if (index >= contents.size()) { contents.resize(index + 1); }
-	contents[index] = value;
-}
-
 static constexpr bool isUseResource(MVKDescriptorBindOperationCode op) {
 	using enum MVKDescriptorBindOperationCode;
 	switch (op) {
@@ -1013,21 +1006,6 @@ void MVKVulkanCommonEncoderState::setLayout(MVKPipelineLayout* layout) {
 		_pushDescriptor.cpuBufferSize = size;
 		ensurePushDescriptorSize(size);
 	}
-}
-
-MVKVulkanCommonEncoderState::MVKVulkanCommonEncoderState(const MVKVulkanCommonEncoderState& other) {
-	memcpy(_descriptorSets, other._descriptorSets, sizeof(_descriptorSets));
-	_pushDescriptor = other._pushDescriptor;
-	setLayout(other._layout);
-	memcpy(_pushDescriptor.cpuBuffer, other._pushDescriptor.cpuBuffer, _pushDescriptor.cpuBufferSize);
-}
-
-MVKVulkanCommonEncoderState& MVKVulkanCommonEncoderState::operator=(const MVKVulkanCommonEncoderState& other) {
-	memmove(_descriptorSets, other._descriptorSets, sizeof(_descriptorSets));
-	_pushDescriptor = other._pushDescriptor;
-	setLayout(other._layout);
-	memmove(_pushDescriptor.cpuBuffer, other._pushDescriptor.cpuBuffer, _pushDescriptor.cpuBufferSize);
-	return *this;
 }
 
 #pragma mark - MVKVulkanGraphicsCommandEncoderState

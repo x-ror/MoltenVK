@@ -401,6 +401,16 @@ emits lookup tables for them).
 
 ## 6. Style and dead code
 
+**Status:** implemented on this branch, with these scope notes. The draw refactor extracts the
+tessellation-control dispatch and the tessellated rasterization of `MVKCmdDraw` and
+`MVKCmdDrawIndexed` into shared helpers, and gives the two indirect draws a shared workgroup
+size helper; the indirect bodies are otherwise unchanged. It is a pure refactor but needs a CTS
+run. The immutable sampler gather now reads each binding's source through a stable sorted index
+array. `MVKSmallVector::assign()` copies a pointer range of trivially copyable elements as one
+block, so the transfer commands use it. The secondary-inheritance input attachment vectors are
+left for a maintainer decision. `MVKFoundation.h` keeps `<string>`, since other files may rely
+on it transitively. `mvkValidateCerealArchiveSize` is unchanged.
+
 - `MVKCommandBuffer.h:564` `_flushCount` is write-only; `MVKCommandBuffer.h:503`
   `_mtlThreadgroupSize` unreferenced; `MVKPipeline.h:209` `_stageUsesPushConstants` written,
   never read; `MVKPipeline.mm:2551` `_count` unused; `MVKCommandEncoderState.mm:421-425`

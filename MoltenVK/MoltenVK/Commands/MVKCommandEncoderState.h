@@ -175,8 +175,8 @@ struct MVKVulkanCommonEncoderState {
 	void ensurePushDescriptorSize(uint32_t size);
 	void setLayout(MVKPipelineLayout* layout);
 	MVKVulkanCommonEncoderState() = default;
-	MVKVulkanCommonEncoderState(const MVKVulkanCommonEncoderState& other);
-	MVKVulkanCommonEncoderState& operator=(const MVKVulkanCommonEncoderState& other);
+	MVKVulkanCommonEncoderState(const MVKVulkanCommonEncoderState& other) = delete;
+	MVKVulkanCommonEncoderState& operator=(const MVKVulkanCommonEncoderState& other) = delete;
 };
 
 /** Tracks the state of a Vulkan render encoder. */

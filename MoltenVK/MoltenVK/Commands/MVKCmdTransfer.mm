@@ -959,9 +959,6 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPD];
 		cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mvkMTLRenderCommandEncoderLabel(kMVKCommandUseResolveImage));
 
-		[mtlRendEnc pushDebugGroup: @"vkCmdResolveImage"];
-		[mtlRendEnc popDebugGroup];
-
 		cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
 		cmdEncoder->barrierUpdate(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
 
@@ -1117,9 +1114,7 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _image = (MVKImage*)pCopyBufferToImageInfo->dstImage;
     _toImage = true;
     
-    _bufferImageCopyRegions.clear();     // Clear for reuse
-    _bufferImageCopyRegions.resize(pCopyBufferToImageInfo->regionCount);
-    std::memcpy(_bufferImageCopyRegions.data(), pCopyBufferToImageInfo->pRegions, pCopyBufferToImageInfo->regionCount * sizeof(VkBufferImageCopy2));
+    _bufferImageCopyRegions.assign(pCopyBufferToImageInfo->pRegions, pCopyBufferToImageInfo->pRegions + pCopyBufferToImageInfo->regionCount);
     return validate(cmdBuff);
 }
 
@@ -1130,20 +1125,18 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _image = (MVKImage*)pCopyImageToBufferInfo->srcImage;
     _toImage = false;
     
-    _bufferImageCopyRegions.clear();     // Clear for reuse
-    _bufferImageCopyRegions.resize(pCopyImageToBufferInfo->regionCount);
-    std::memcpy(_bufferImageCopyRegions.data(), pCopyImageToBufferInfo->pRegions, pCopyImageToBufferInfo->regionCount * sizeof(VkBufferImageCopy2));
+    _bufferImageCopyRegions.assign(pCopyImageToBufferInfo->pRegions, pCopyImageToBufferInfo->pRegions + pCopyImageToBufferInfo->regionCount);
     return validate(cmdBuff);
 }
 
 template <size_t N>
 inline VkResult MVKCmdBufferImageCopy<N>::validate(MVKCommandBuffer *cmdBuff) {
-    for (auto& region : _bufferImageCopyRegions) {
-        if (!_image->hasExpectedTexelSize()) {
-            MTLPixelFormat mtlPixFmt = _image->getMTLPixelFormat(MVKImage::getPlaneFromVkImageAspectFlags(region.imageSubresource.aspectMask));
-            const char* cmdName = _toImage ? "vkCmdCopyBufferToImage" : "vkCmdCopyImageToBuffer";
-            return cmdBuff->reportError(VK_ERROR_FORMAT_NOT_SUPPORTED, "%s(): The image is using Metal format %s as a substitute for Vulkan format %s. Since the pixel size is different, content for the image cannot be copied to or from a buffer.", cmdName, cmdBuff->getPixelFormats()->getName(mtlPixFmt), cmdBuff->getPixelFormats()->getName(_image->getVkFormat()));
-        }
+    if ( !_image->hasExpectedTexelSize() && !_bufferImageCopyRegions.empty() ) {
+        // The error does not depend on the region, so report it using the first region's plane.
+        auto& region = _bufferImageCopyRegions[0];
+        MTLPixelFormat mtlPixFmt = _image->getMTLPixelFormat(MVKImage::getPlaneFromVkImageAspectFlags(region.imageSubresource.aspectMask));
+        const char* cmdName = _toImage ? "vkCmdCopyBufferToImage" : "vkCmdCopyImageToBuffer";
+        return cmdBuff->reportError(VK_ERROR_FORMAT_NOT_SUPPORTED, "%s(): The image is using Metal format %s as a substitute for Vulkan format %s. Since the pixel size is different, content for the image cannot be copied to or from a buffer.", cmdName, cmdBuff->getPixelFormats()->getName(mtlPixFmt), cmdBuff->getPixelFormats()->getName(_image->getVkFormat()));
     }
     return VK_SUCCESS;
 }
@@ -1785,10 +1778,7 @@ VkResult MVKCmdUpdateBuffer::setContent(MVKCommandBuffer* cmdBuff,
 										const void* pData) {
     _dstBuffer = (MVKBuffer*)dstBuffer;
     _dstOffset = dstOffset;
-    _dataSize = dataSize;
-
-    _srcDataCache.reserve(_dataSize);
-    memcpy(_srcDataCache.data(), pData, _dataSize);
+    _srcDataCache.assign((const uint8_t*)pData, (const uint8_t*)pData + dataSize);
 
 	return VK_SUCCESS;
 }
@@ -1801,12 +1791,12 @@ void MVKCmdUpdateBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     NSUInteger dstMTLBuffOffset = _dstBuffer->getMTLBufferOffset() + _dstOffset;
 
     // Copy data to a temporary source MTLBuffer, which is returned to the pool once the command buffer is done with it
-    const MVKMTLBufferAllocation* srcMTLBufferAlloc = cmdEncoder->copyToTempMTLBufferAllocation(_srcDataCache.data(), _dataSize);
+    const MVKMTLBufferAllocation* srcMTLBufferAlloc = cmdEncoder->copyToTempMTLBufferAllocation(_srcDataCache.data(), _srcDataCache.size());
 
     [mtlBlitEnc copyFromBuffer: srcMTLBufferAlloc->_mtlBuffer
                   sourceOffset: srcMTLBufferAlloc->_offset
                       toBuffer: dstMTLBuff
              destinationOffset: dstMTLBuffOffset
-                          size: _dataSize];
+                          size: _srcDataCache.size()];
 }
 

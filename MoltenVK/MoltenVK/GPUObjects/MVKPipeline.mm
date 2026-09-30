@@ -26,7 +26,8 @@
 #include "MTLRenderPipelineDescriptor+MoltenVK.h"
 #include "mvk_datatypes.hpp"
 #include <sys/stat.h>
-#include <sstream>
+#include <istream>
+#include <ostream>
 
 #ifndef MVK_USE_CEREAL
 #define MVK_USE_CEREAL (1)
@@ -420,10 +421,9 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 		layout->retain();
 
-		// Establish descriptor counts and push constants use.
+		// Establish descriptor counts.
 		for (uint32_t stage = kMVKShaderStageVertex; stage < kMVKShaderStageCount; stage++) {
 			_descriptorBufferCounts.stages[stage] = layout->getResourceCounts().stages[stage].bufferIndex;
-			_stageUsesPushConstants[stage] = layout->stageUsesPushConstants((MVKShaderStage)stage);
 		}
 	}
 
@@ -2552,7 +2552,6 @@ protected:
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
 
 	MVKShaderLibraryCache* _pSLCache;
-	size_t _count = 0;
 	int32_t _index = -1;
 };
 

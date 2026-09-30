@@ -206,7 +206,6 @@ protected:
 	MVKShaderImplicitRezBinding _descriptorBufferCounts;
 	VkPipelineCreateFlags2 _flags;
 	uint32_t _descriptorSetCount;
-	bool _stageUsesPushConstants[kMVKShaderStageCount];
 	bool _hasValidMTLPipelineStates = true;
 
 };

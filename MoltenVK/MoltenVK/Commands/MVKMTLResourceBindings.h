@@ -29,24 +29,24 @@ class MVKImage;
 
 
 /** Describes a MTLBuffer resource binding used for a vertex buffer. */
-typedef struct MVKVertexMTLBufferBinding {
+struct MVKVertexMTLBufferBinding {
 	union { id<MTLBuffer> mtlBuffer = nil; id<MTLBuffer> mtlResource; }; // aliases
 	VkDeviceSize offset = 0;
 	uint32_t size = 0;
 	uint32_t stride = 0;
-} MVKVertexMTLBufferBinding;
+};
 
 /** Describes a MTLBuffer resource binding as used for an index buffer. */
-typedef struct MVKIndexMTLBufferBinding {
+struct MVKIndexMTLBufferBinding {
     union { id<MTLBuffer> mtlBuffer = nil; id<MTLBuffer> mtlResource; }; // aliases
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
     VkIndexType vkIndexType = VK_INDEX_TYPE_UINT32;
     uint8_t mtlIndexType = 0;		// MTLIndexType
-} MVKIndexMTLBufferBinding;
+};
 
 /** Concise and consistent structure for holding pipeline barrier info. */
-typedef struct MVKPipelineBarrier {
+struct MVKPipelineBarrier {
 
 	typedef enum : uint8_t {
 		None,
@@ -174,5 +174,5 @@ typedef struct MVKPipelineBarrier {
 		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex)
 		{}
 
-} MVKPipelineBarrier;
+};
 

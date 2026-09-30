@@ -1379,20 +1379,7 @@ void MVKCommandEncoder::finishQueries() {
 MVKCommandEncoder::MVKCommandEncoder(MVKCommandBuffer* cmdBuffer, MVKPrefillMetalCommandBuffersStyle prefillStyle)
 	: MVKBaseDeviceObject(cmdBuffer->getDevice())
 	, _cmdBuffer(cmdBuffer)
-	, _prefillStyle(prefillStyle) {
-	_pActivatedQueries = nullptr;
-	_mtlCmdBuffer = nil;
-	_mtlRenderEncoder = nil;
-	_hasMTLRenderEncoderVisibilityResultBuffer = false;
-	_mtlComputeEncoder = nil;
-	_mtlComputeEncoderUse = kMVKCommandUseNone;
-	_mtlComputeEncoderStages = 0;
-	_mtlBlitEncoder = nil;
-	_mtlBlitEncoderUse = kMVKCommandUseNone;
-	_pEncodingContext = nullptr;
-	_stageCountersMTLFence = nil;
-	_flushCount = 0;
-}
+	, _prefillStyle(prefillStyle) {}
 
 MVKCommandEncoder::~MVKCommandEncoder() {
 	[_mtlRenderEncoder release];

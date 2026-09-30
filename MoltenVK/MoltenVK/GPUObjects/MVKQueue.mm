@@ -736,8 +736,8 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 	// Wait time from an async vkQueuePresentKHR() call to starting presentation of the swapchains
 	addPerformanceInterval(getPerformanceStats().queue.waitPresentSwapchains, _creationTime);
 
-	for (int i = 0; i < _presentInfo.size(); i++ ) {
-		setConfigurationResult(_presentInfo[i].presentableImage->presentCAMetalDrawable(mtlCmdBuff, _presentInfo[i]));
+	for (auto& presentInfo : _presentInfo) {
+		setConfigurationResult(presentInfo.presentableImage->presentCAMetalDrawable(mtlCmdBuff, presentInfo));
 	}
 
 	if (_queue->_isDefaultGPUCaptureScopeQueue) {

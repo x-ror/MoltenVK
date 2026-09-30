@@ -53,6 +53,8 @@ Released TBD
 - Make `MVKSmallVector` iterators plain pointers, move and copy trivially copyable elements as blocks of bytes, and fix erasing an empty range from the middle of an `MVKSmallVector` moving the following elements onto themselves.
 - Add move operations to `MVKBitArray`, and require trivially copyable types in `mvkClear()`, `mvkCopy()` and `mvkAreEqual()`.
 - Adopt C++20 features across the codebase: defaulted comparisons, `using enum`, designated initializers, concepts and `requires` expressions in place of SFINAE and tag dispatch, `constexpr` helpers and constants, `[[likely]]` and `[[unlikely]]` on fast paths, and array views in place of pointer and count pairs.
+- Remove unused members and helpers, initialize command encoder members at their declarations, share the tessellation draw encoding between direct and indexed draws, sort descriptor set layout bindings without a search for their immutable samplers, and copy trivially copyable ranges into an `MVKSmallVector` as one block.
+- Fix `MVKConfigMembers.def` member types that differed from `MVKConfiguration`.
 - Fix `mvk::trim()` leaving trailing whitespace when the string also has leading whitespace, and undefined behavior writing UUID bytes and classifying non-ASCII characters.
 
 

@@ -343,6 +343,27 @@ public:
   template <class InputIterator>
   void assign( InputIterator first, InputIterator last )
   {
+    if constexpr( std::is_pointer_v<InputIterator> &&
+                  std::is_same_v<std::remove_cv_t<std::remove_pointer_t<InputIterator>>, Type> &&
+                  std::is_trivially_copyable_v<Type> )
+    {
+      // A pointer range of trivially copyable elements is copied in a single block.
+      // A range that exceeds capacity cannot overlap this vector, but one within
+      // capacity might, so it is moved rather than copied.
+      const size_t n = static_cast<size_t>( last - first );
+      if( n > capacity() )
+      {
+        vector_Allocate( n );
+        memcpy( static_cast<void*>( alc.ptr ), static_cast<const void*>( first ), n * sizeof( Type ) );
+      }
+      else if( n )
+      {
+        memmove( static_cast<void*>( alc.ptr ), static_cast<const void*>( first ), n * sizeof( Type ) );
+      }
+      alc.num_elements_used = n;
+      return;
+    }
+
     clear();
 
     while( first != last )

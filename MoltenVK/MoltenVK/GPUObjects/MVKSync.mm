@@ -511,7 +511,7 @@ void MVKDeferredOperation::deferOperation(const MVKDeferredOperationFunctionPoin
     _functionType = type;
 
 	_functionParameters.reserve(paramCount);
-	for(int i = 0; i < paramCount; i++) {
+	for (uint32_t i = 0; i < paramCount; i++) {
         _functionParameters.push_back(parameters[i]);
     }
 
