@@ -73,6 +73,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 												VkPipelineCreationFeedback* pShaderFeedback,
 												MVKShaderModule* shaderModule) {
 
+	ensureCompiled();
 	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
 
 	// If specialization happens on constants mapped to macros, the function comes from a library
@@ -227,6 +228,16 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 	return mtlFunc;
 }
 
+// Compiles the MTLLibrary if compilation was deferred when this library was restored from pipeline cache data.
+void MVKShaderLibrary::ensureCompiled() {
+	lock_guard<mutex> lock(_functionsLock);
+	if ( !_isCompileDeferred ) { return; }
+	_isCompileDeferred = false;
+	string msl;
+	decompressMSL(msl);
+	compileLibrary(msl);
+}
+
 // Releases the cached functions. Called when the entry point changes, and on destruction.
 void MVKShaderLibrary::clearFunctionCache() {
 	lock_guard<mutex> lock(_functionsLock);
@@ -279,14 +290,17 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 								   const SPIRVToMSLConversionResultInfo& resultInfo,
-								   const MVKCompressor<std::string> compressedMSL,
-								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) :
+								   const MVKCompressor<std::string>& compressedMSL,
+								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef,
+								   bool deferCompile) :
 	MVKBaseDeviceObject(owner->getDevice()),
 	_owner(owner),
-	_maySpecializeWithMacro(specializationMacroDef == nullptr) {
+	_maySpecializeWithMacro(specializationMacroDef == nullptr),
+	_isCompileDeferred(deferCompile && !specializationMacroDef) {
 
 	_shaderConversionResultInfo = resultInfo;
 	_compressedMSL = compressedMSL;
+	if (_isCompileDeferred) { return; }
 	string msl;
 	decompressMSL(msl);
 	compileLibrary(msl, specializationMacroDef);
@@ -339,7 +353,8 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	MVKBaseDeviceObject(other._device),
 	_owner(other._owner),
-	_maySpecializeWithMacro(other._maySpecializeWithMacro) {
+	_maySpecializeWithMacro(other._maySpecializeWithMacro),
+	_isCompileDeferred(other._isCompileDeferred.load()) {
 
 	_mtlLibrary = [other._mtlLibrary retain];
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
@@ -505,8 +520,9 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 // Adds and returns a new shader library configured from contents read from a pipeline cache.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResultInfo& resultInfo,
-														  const MVKCompressor<std::string> compressedMSL) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
+														  const MVKCompressor<std::string>& compressedMSL,
+														  bool deferCompile) {
+	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL, nullptr, deferCompile);
 	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
 	return shLib;
 }
