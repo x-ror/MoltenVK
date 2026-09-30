@@ -568,6 +568,10 @@ also asks for the full mustpass list.
 | 6 | `4586a88`, `1fd53ed` | Sections 5 and 6. CTS on tessellation, draw and transfer, since section 6 moves the direct tessellated draw into shared helpers. |
 | 7 | `517b4f3`, `207daf0` | Sections 7 and 8. CTS on copy, clear, resolve, multiview and device creation. |
 
+The first macOS build found that `a192c4a` does not compile. It constructs `MVKSmallVector`
+from `uint32_t` counts, which the generic container constructor matched exactly. `d7b98d4`
+fixes that, and the script applies it to every stage from `a192c4a` on before building them.
+
 These items were left for a maintainer decision:
 
 - 0.11: whether a render pass whose color attachments are all 3D should set

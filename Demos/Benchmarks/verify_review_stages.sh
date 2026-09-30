@@ -54,6 +54,13 @@ default_stages=(
 	s6=1fd53ed       # Section 6: style and dead code, including the draw encoder refactor.
 	s7=517b4f3       # Section 7: GPU helper kernels.
 	s8=207daf0       # Section 8: extension list and render pass check.
+	s9=HEAD          # Section 9 and the build fixes below.
+)
+
+# Build fixes made after a stage was committed, as "BROKEN_BY:FIX" commit pairs. A stage that
+# contains BROKEN_BY but not FIX gets FIX applied to its worktree before it is built.
+build_fixes=(
+	a192c4a:d7b98d4  # MVKSmallVector construction from a uint32_t count.
 )
 
 while [[ $# -gt 0 ]]; do
@@ -105,8 +112,19 @@ if [[ -z "$skip_build" ]]; then
 		if [[ ! -d "$tree" ]]; then
 			run git -C "$repo" worktree add --detach "$tree" "$rev"
 		else
+			# Discard fixes applied by an earlier run before moving to the stage's revision.
+			run git -C "$tree" reset --hard --quiet
 			run git -C "$tree" checkout --detach "$rev"
 		fi
+		for fix in "${build_fixes[@]}"; do
+			broken_by="${fix%%:*}"
+			fix_rev="${fix#*:}"
+			if git -C "$repo" merge-base --is-ancestor "$broken_by" "$rev" &&
+			   ! git -C "$repo" merge-base --is-ancestor "$fix_rev" "$rev"; then
+				echo "Applying build fix $fix_rev to $label"
+				run git -C "$tree" cherry-pick --no-commit "$fix_rev"
+			fi
+		done
 
 		# Share the dependencies when a stage uses the same external revisions as the first stage.
 		if [[ -z "$shared_external" ]]; then
