@@ -654,9 +654,11 @@ static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
 /**
  * If pV1 and pV2 are both not null, returns whether the contents of the two values are equal,
  * otherwise returns false. The optional count allows comparing multiple elements in an array.
+ * Ranges of zero elements are always equal, whether or not their pointers are null.
  */
 template<typename T>
 static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) {
+	if (count == 0) { return true; }					// Empty ranges are equal, even with null pointers (e.g. an empty MVKArrayRef)
 	if ( !pV1 || !pV2 ) { return false; }				// Bad pointers
 	if (pV1 == pV2) { return true; }					// Same object
 	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { return *pV1 == *pV2; } }  // Fast compare of a single primitive
