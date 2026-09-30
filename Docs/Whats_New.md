@@ -34,6 +34,7 @@ Released TBD
 - Fix SPIR-V to MSL conversion errors being reported as Metal compilation errors, and a possible crash on malformed SPIR-V.
 - Skip re-running the descriptor bind script on draws and dispatches that change no descriptor state, and track resources used by a Metal encoder in a map that keeps its storage across encoders.
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
+- Fix a crash, or push descriptors not being written, when the `VkDescriptorUpdateTemplate` of `vkCmdPushDescriptorSetWithTemplate()` is destroyed before the command buffer is submitted.
 - Pass the draw index to shaders that read `gl_DrawID` inline on direct draws, and return temporary `MTLBuffer` allocations to their pools with one completion handler per Metal command buffer.
 
 

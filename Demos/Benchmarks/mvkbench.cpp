@@ -24,7 +24,9 @@
  *
  * Scenarios:
  *   draw       Records one command buffer with many small draws and measures vkQueueSubmit(),
- *              which is where MoltenVK encodes Metal commands by default.
+ *              which is where MoltenVK encodes Metal commands by default. Patterns cover
+ *              descriptor rebinds, pipeline switches, gl_DrawID, and many short render passes
+ *              with render pass objects or dynamic rendering.
  *   pipelines  Creates many graphics pipelines from 1..N threads sharing one VkPipelineCache,
  *              and measures the wall-clock time and scaling.
  *   cache      Measures vkCreatePipelineCache() with a populated cache blob, and the creation
@@ -84,6 +86,7 @@ using namespace std;
 	X(vkEnumeratePhysicalDevices) \
 	X(vkGetPhysicalDeviceProperties) \
 	X(vkGetPhysicalDeviceFeatures) \
+	X(vkGetPhysicalDeviceFeatures2) \
 	X(vkGetPhysicalDeviceQueueFamilyProperties) \
 	X(vkGetPhysicalDeviceMemoryProperties) \
 	X(vkEnumerateDeviceExtensionProperties) \
@@ -157,6 +160,10 @@ MVKB_GLOBAL_FUNCS(MVKB_DECLARE_FUNC)
 MVKB_INSTANCE_FUNCS(MVKB_DECLARE_FUNC)
 MVKB_DEVICE_FUNCS(MVKB_DECLARE_FUNC)
 
+// Optional, loaded only when VK_KHR_dynamic_rendering is enabled.
+static PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
+static PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR = nullptr;
+
 static void loadLibrary(const string& path) {
 	void* lib = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 	if ( !lib ) { fail("cannot load Vulkan library '%s': %s", path.c_str(), dlerror()); }
@@ -210,6 +217,7 @@ struct Options {
 	bool validation = false;
 	uint32_t draws = 20000;
 	uint32_t iterations = 20;
+	uint32_t drawsPerPass = 8;
 	uint32_t pipelines = 64;
 	vector<uint32_t> threads = {1, 2, 4, 8};
 	string mode = "unique";		// unique | spec | same
@@ -224,6 +232,7 @@ static void usage() {
 		   "  --validation        Enable VK_LAYER_KHRONOS_validation (requires a loader, not a bare ICD)\n"
 		   "  --draws N           Draws per command buffer in the draw scenario (default 20000)\n"
 		   "  --iterations N      Measured submits in the draw scenario (default 20)\n"
+		   "  --draws-per-pass N  Draws per render pass in the passes and dynpasses draw patterns (default 8)\n"
 		   "  --pipelines N       Pipelines per measurement in the pipelines and cache scenarios (default 64)\n"
 		   "  --threads LIST      Comma-separated thread counts for the pipelines scenario (default 1,2,4,8)\n"
 		   "  --mode MODE         Pipeline variety: unique (distinct shaders), spec (one shader, distinct\n"
@@ -257,6 +266,7 @@ static Options parseOptions(int argc, char** argv) {
 		else if (arg == "--validation") { opts.validation = true; }
 		else if (arg == "--draws") { opts.draws = parseList(next())[0]; }
 		else if (arg == "--iterations") { opts.iterations = parseList(next())[0]; }
+		else if (arg == "--draws-per-pass") { opts.drawsPerPass = parseList(next())[0]; }
 		else if (arg == "--pipelines") { opts.pipelines = parseList(next())[0]; }
 		else if (arg == "--threads") { opts.threads = parseList(next()); }
 		else if (arg == "--mode") { opts.mode = next(); }
@@ -287,6 +297,8 @@ struct Context {
 	uint32_t queueFamily = 0;
 	VkQueue queue = VK_NULL_HANDLE;
 	VkCommandPool commandPool = VK_NULL_HANDLE;
+	bool shaderDrawParameters = false;	// gl_DrawID is available
+	bool dynamicRendering = false;		// VK_KHR_dynamic_rendering is enabled
 };
 
 static bool hasExtension(const vector<VkExtensionProperties>& exts, const char* name) {
@@ -358,13 +370,39 @@ static Context createContext(const Options& opts) {
 	// A portability-subset implementation requires the app to enable this extension.
 	if (hasExtension(devExts, "VK_KHR_portability_subset")) { deviceExtensions.push_back("VK_KHR_portability_subset"); }
 
+	// Optional features for some draw patterns. The instance stays at Vulkan 1.1, so dynamic
+	// rendering is enabled through the extension and its dependencies.
+	bool hasDynamicRenderingExts = (hasExtension(devExts, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) &&
+									hasExtension(devExts, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME) &&
+									hasExtension(devExts, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME));
+	VkPhysicalDeviceDynamicRenderingFeaturesKHR dynRendFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
+	VkPhysicalDeviceShaderDrawParametersFeatures drawParamFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
+	drawParamFeatures.pNext = hasDynamicRenderingExts ? &dynRendFeatures : nullptr;
+	VkPhysicalDeviceFeatures2 supported2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+	supported2.pNext = &drawParamFeatures;
+	vkGetPhysicalDeviceFeatures2(ctx.physicalDevice, &supported2);
+	ctx.shaderDrawParameters = drawParamFeatures.shaderDrawParameters;
+	ctx.dynamicRendering = hasDynamicRenderingExts && dynRendFeatures.dynamicRendering;
+	if (ctx.dynamicRendering) {
+		deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+		deviceExtensions.push_back(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+		deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+	}
+
 	// The draw shader indexes descriptor arrays with a loop counter.
 	VkPhysicalDeviceFeatures supported = {};
 	vkGetPhysicalDeviceFeatures(ctx.physicalDevice, &supported);
 	if ( !supported.shaderSampledImageArrayDynamicIndexing || !supported.shaderUniformBufferArrayDynamicIndexing ) {
 		fail("the device does not support dynamic indexing of sampled image and uniform buffer arrays");
 	}
-	VkPhysicalDeviceFeatures features = {};
+	VkPhysicalDeviceDynamicRenderingFeaturesKHR enabledDynRend = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
+	enabledDynRend.dynamicRendering = VK_TRUE;
+	VkPhysicalDeviceShaderDrawParametersFeatures enabledDrawParams = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
+	enabledDrawParams.shaderDrawParameters = ctx.shaderDrawParameters;
+	enabledDrawParams.pNext = ctx.dynamicRendering ? &enabledDynRend : nullptr;
+	VkPhysicalDeviceFeatures2 features2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+	features2.pNext = &enabledDrawParams;
+	VkPhysicalDeviceFeatures& features = features2.features;
 	features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
 	features.shaderUniformBufferArrayDynamicIndexing = VK_TRUE;
 
@@ -379,9 +417,14 @@ static Context createContext(const Options& opts) {
 	devInfo.pQueueCreateInfos = &queueInfo;
 	devInfo.enabledExtensionCount = (uint32_t)deviceExtensions.size();
 	devInfo.ppEnabledExtensionNames = deviceExtensions.data();
-	devInfo.pEnabledFeatures = &features;
+	devInfo.pNext = &features2;
 	VK_CHECK(vkCreateDevice(ctx.physicalDevice, &devInfo, nullptr, &ctx.device));
 	loadDeviceFunctions(ctx.device);
+	if (ctx.dynamicRendering) {
+		vkCmdBeginRenderingKHR = (PFN_vkCmdBeginRenderingKHR)vkGetDeviceProcAddr(ctx.device, "vkCmdBeginRenderingKHR");
+		vkCmdEndRenderingKHR = (PFN_vkCmdEndRenderingKHR)vkGetDeviceProcAddr(ctx.device, "vkCmdEndRenderingKHR");
+		if ( !vkCmdBeginRenderingKHR || !vkCmdEndRenderingKHR ) { fail("cannot load the VK_KHR_dynamic_rendering commands"); }
+	}
 	vkGetDeviceQueue(ctx.device, ctx.queueFamily, 0, &ctx.queue);
 
 	VkCommandPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -575,7 +618,8 @@ struct DrawPushConstants {
 };
 
 static void runDrawScenario(const Context& ctx, const Options& opts) {
-	printf("\n== draw: %u draws per command buffer, %u measured submits ==\n", opts.draws, opts.iterations);
+	printf("\n== draw: %u draws per command buffer, %u measured submits, %u draws per pass in the passes patterns ==\n",
+		   opts.draws, opts.iterations, opts.drawsPerPass);
 
 	VkDevice dev = ctx.device;
 
@@ -719,23 +763,40 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 	writes[2].pBufferInfo = materialInfos;
 	vkUpdateDescriptorSets(dev, 3, writes, 0, nullptr);
 
-	// Two pipelines that differ only in blending, used by the pipeline-switch pattern.
+	// Pipelines, all with the same layout and fragment shader:
+	//   0: the default pipeline
+	//   1: differs from 0 only in blending, used by the switch pattern
+	//   2: vertex shader reads gl_DrawID, used by the drawid pattern
+	//   3: pipeline 0 for dynamic rendering, used by the dynpasses pattern
+	enum { kPipelineDefault, kPipelineBlend, kPipelineDrawID, kPipelineDynamic, kPipelineCount };
 	VkShaderModule vs = createShaderModule(ctx, kSPIRV_draw_vert, sizeof(kSPIRV_draw_vert));
+	VkShaderModule vsDrawID = ctx.shaderDrawParameters ? createShaderModule(ctx, kSPIRV_draw_drawid_vert, sizeof(kSPIRV_draw_drawid_vert)) : VK_NULL_HANDLE;
 	VkShaderModule fs = createShaderModule(ctx, kSPIRV_draw_frag, sizeof(kSPIRV_draw_frag));
-	VkPipelineShaderStageCreateInfo stages[2] = {};
-	stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr };
-	stages[1] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr };
 	VkPipelineVertexInputStateCreateInfo vertexInput = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-	VkPipeline pipelines[2];
-	for (uint32_t p = 0; p < 2; p++) {
-		PipelineState state(p == 1);
+	VkFormat colorFormat = kColorFormat;
+	VkPipelineRenderingCreateInfoKHR renderingInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
+	renderingInfo.colorAttachmentCount = 1;
+	renderingInfo.pColorAttachmentFormats = &colorFormat;
+	VkPipeline pipelines[kPipelineCount] = {};
+	for (uint32_t p = 0; p < kPipelineCount; p++) {
+		if (p == kPipelineDrawID && !ctx.shaderDrawParameters) { continue; }
+		if (p == kPipelineDynamic && !ctx.dynamicRendering) { continue; }
+		VkPipelineShaderStageCreateInfo stages[2] = {};
+		stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
+					  (p == kPipelineDrawID) ? vsDrawID : vs, "main", nullptr };
+		stages[1] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr };
+		PipelineState state(p == kPipelineBlend);
 		VkGraphicsPipelineCreateInfo info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
 		info.stageCount = 2;
 		info.pStages = stages;
 		info.pVertexInputState = &vertexInput;
 		state.apply(info);
 		info.layout = pipelineLayout;
-		info.renderPass = renderPass;
+		if (p == kPipelineDynamic) {
+			info.pNext = &renderingInfo;
+		} else {
+			info.renderPass = renderPass;
+		}
 		VK_CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &pipelines[p]));
 	}
 
@@ -744,18 +805,27 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 
 	struct Pattern { const char* name; const char* description; };
 	const Pattern patterns[] = {
-		{ "static",  "bind pipeline and sets once, then push constants + draw" },
-		{ "rebind",  "bind descriptor sets before every draw" },
-		{ "switch",  "alternate between two pipelines on every draw" },
+		{ "static",    "bind pipeline and sets once, then push constants + draw" },
+		{ "rebind",    "bind descriptor sets before every draw" },
+		{ "switch",    "alternate between two pipelines on every draw" },
+		{ "drawid",    "as static, with a vertex shader that reads gl_DrawID" },
+		{ "passes",    "as static, in many short render passes (VkRenderPass)" },
+		{ "dynpasses", "as static, in many short render passes (dynamic rendering)" },
 	};
 
-	printf("%-8s %12s %12s %14s %12s   %s\n", "pattern", "record ms", "submit ms", "submit us/draw", "gpu wait ms", "description");
+	printf("%-9s %12s %12s %14s %12s   %s\n", "pattern", "record ms", "submit ms", "submit us/draw", "gpu wait ms", "description");
 	for (const Pattern& pattern : patterns) {
 		string name = pattern.name;
+		bool isDynamic = (name == "dynpasses");
+		uint32_t drawsPerPass = (name == "passes" || isDynamic) ? opts.drawsPerPass : opts.draws;
+		uint32_t firstPipeline = kPipelineDefault;
+		if (name == "drawid") { firstPipeline = kPipelineDrawID; }
+		if (isDynamic) { firstPipeline = kPipelineDynamic; }
+		if ( !pipelines[firstPipeline] ) {
+			printf("%-9s skipped: the device does not support %s\n", pattern.name, isDynamic ? "VK_KHR_dynamic_rendering" : "shaderDrawParameters");
+			continue;
+		}
 
-		auto recordStart = Clock::now();
-		VkCommandBufferBeginInfo begin = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-		VK_CHECK(vkBeginCommandBuffer(cb, &begin));
 		VkClearValue clear = {};
 		VkRenderPassBeginInfo rpBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
 		rpBegin.renderPass = renderPass;
@@ -763,18 +833,63 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 		rpBegin.renderArea = { { 0, 0 }, { kRenderSize, kRenderSize } };
 		rpBegin.clearValueCount = 1;
 		rpBegin.pClearValues = &clear;
-		vkCmdBeginRenderPass(cb, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+		VkRenderingAttachmentInfoKHR colorAtt = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+		colorAtt.imageView = target.view;
+		colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAtt.clearValue = clear;
+		VkRenderingInfoKHR renderingBegin = { VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
+		renderingBegin.renderArea = rpBegin.renderArea;
+		renderingBegin.layerCount = 1;
+		renderingBegin.colorAttachmentCount = 1;
+		renderingBegin.pColorAttachments = &colorAtt;
+		auto beginPass = [&]() {
+			if (isDynamic) {
+				vkCmdBeginRenderingKHR(cb, &renderingBegin);
+			} else {
+				vkCmdBeginRenderPass(cb, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+			}
+		};
+		auto endPass = [&]() {
+			if (isDynamic) {
+				vkCmdEndRenderingKHR(cb);
+			} else {
+				vkCmdEndRenderPass(cb);
+			}
+		};
+
+		auto recordStart = Clock::now();
+		VkCommandBufferBeginInfo begin = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+		VK_CHECK(vkBeginCommandBuffer(cb, &begin));
+		if (isDynamic) {
+			// Dynamic rendering has no initial layout transition, so make one here.
+			VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = target.image;
+			barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+		}
+		beginPass();
 		VkViewport viewport = { 0, 0, float(kRenderSize), float(kRenderSize), 0, 1 };
 		VkRect2D scissor = { { 0, 0 }, { kRenderSize, kRenderSize } };
 		vkCmdSetViewport(cb, 0, 1, &viewport);
 		vkCmdSetScissor(cb, 0, 1, &scissor);
-		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[0]);
+		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[firstPipeline]);
 		vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, sets, 0, nullptr);
 		for (uint32_t d = 0; d < opts.draws; d++) {
+			if (d > 0 && d % drawsPerPass == 0) {
+				endPass();
+				beginPass();
+			}
 			if (name == "rebind") {
 				vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, sets, 0, nullptr);
 			} else if (name == "switch") {
-				vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[d & 1]);
+				vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[(d & 1) ? kPipelineBlend : kPipelineDefault]);
 			}
 			DrawPushConstants pc = {};
 			pc.color[0] = (d % 7) / 7.0f; pc.color[1] = (d % 11) / 11.0f; pc.color[2] = 0.5f; pc.color[3] = 1.0f;
@@ -784,7 +899,7 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 			vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 			vkCmdDraw(cb, 3, 1, 0, 0);
 		}
-		vkCmdEndRenderPass(cb);
+		endPass();
 		VK_CHECK(vkEndCommandBuffer(cb));
 		double recordMs = msSince(recordStart);
 
@@ -804,7 +919,7 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 			if (it > 0) { submitMs.push_back(s); waitMs.push_back(w); }
 		}
 		double med = median(submitMs);
-		printf("%-8s %12.3f %12.3f %14.3f %12.3f   %s\n", pattern.name, recordMs, med, med * 1000.0 / opts.draws, median(waitMs), pattern.description);
+		printf("%-9s %12.3f %12.3f %14.3f %12.3f   %s\n", pattern.name, recordMs, med, med * 1000.0 / opts.draws, median(waitMs), pattern.description);
 		result("draw", name, "record_ms", recordMs);
 		result("draw", name, "submit_ms_median", med);
 		result("draw", name, "submit_ms_min", minimum(submitMs));
@@ -814,8 +929,9 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 
 	VK_CHECK(vkDeviceWaitIdle(dev));
 	vkDestroyFence(dev, fence, nullptr);
-	for (auto p : pipelines) { vkDestroyPipeline(dev, p, nullptr); }
+	for (auto p : pipelines) { if (p) { vkDestroyPipeline(dev, p, nullptr); } }
 	vkDestroyShaderModule(dev, vs, nullptr);
+	if (vsDrawID) { vkDestroyShaderModule(dev, vsDrawID, nullptr); }
 	vkDestroyShaderModule(dev, fs, nullptr);
 	vkDestroyDescriptorPool(dev, descPool, nullptr);
 	vkDestroyPipelineLayout(dev, pipelineLayout, nullptr);
