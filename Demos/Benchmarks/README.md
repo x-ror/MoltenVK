@@ -20,6 +20,15 @@ The `draw` scenario records the command buffer with three patterns:
 - `static` binds the pipeline and descriptor sets once, then changes only push constants between draws.
 - `rebind` binds the descriptor sets again before every draw.
 - `switch` alternates between two pipelines on every draw.
+- `drawid` is `static` with a vertex shader that reads `gl_DrawID`. MoltenVK passes the draw index
+  to such shaders separately for every draw. Needs the `shaderDrawParameters` feature.
+- `passes` is `static` split into render passes of `--draws-per-pass` draws (default 8), begun
+  with `vkCmdBeginRenderPass()` and a `VkFramebuffer` created once.
+- `dynpasses` is `passes` with `vkCmdBeginRenderingKHR()` instead. MoltenVK creates its internal
+  render pass and framebuffer objects for every dynamic render pass it encodes, so the difference
+  from `passes` is mostly that cost. Needs `VK_KHR_dynamic_rendering`.
+
+A pattern whose feature the device lacks is reported as skipped.
 
 The draw fragment shader statically uses 16 combined image samplers and 8 uniform buffers, to
 make the per-draw descriptor work in the driver visible. Each draw is a tiny triangle, so GPU time
@@ -96,6 +105,7 @@ libraries. Otherwise it is labeled `noise`.
 --validation        Enable VK_LAYER_KHRONOS_validation (needs a Vulkan loader, not a bare ICD)
 --draws N           Draws per command buffer in the draw scenario (default 20000)
 --iterations N      Measured submits in the draw scenario (default 20)
+--draws-per-pass N  Draws per render pass in the passes and dynpasses draw patterns (default 8)
 --pipelines N       Pipelines per measurement in the pipelines and cache scenarios (default 64)
 --threads LIST      Thread counts for the pipelines scenario (default 1,2,4,8)
 --mode MODE         unique, spec or same (default unique)

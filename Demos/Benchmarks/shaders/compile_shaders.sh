@@ -15,7 +15,7 @@ out=../shaders.h
 	echo "#include <cstdint>"
 	echo
 } > "$out"
-for f in draw.vert draw.frag pipeline.vert pipeline.frag; do
+for f in draw.vert draw_drawid.vert draw.frag pipeline.vert pipeline.frag; do
 	glslangValidator -V --target-env vulkan1.1 -o "$tmp/$f.spv" "$f" > /dev/null
 	name="kSPIRV_${f//./_}"
 	echo "static const uint32_t ${name}[] = {" >> "$out"
