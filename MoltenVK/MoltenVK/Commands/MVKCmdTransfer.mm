@@ -136,8 +136,8 @@ template <size_t N>
 void MVKCmdCopyImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse commandUse) {
     MVKPixelFormats* pixFmts = cmdEncoder->getPixelFormats();
     uint32_t copyCnt = (uint32_t)_vkImageCopies.size();
-    VkBufferImageCopy vkSrcCopies[copyCnt];
-    VkBufferImageCopy vkDstCopies[copyCnt];
+    MVKSmallVector<VkBufferImageCopy, 4> vkSrcCopies(copyCnt);
+    MVKSmallVector<VkBufferImageCopy, 4> vkDstCopies(copyCnt);
     size_t tmpBuffSize = 0;
 
     for (uint32_t copyIdx = 0; copyIdx < copyCnt; copyIdx++) {
@@ -308,13 +308,13 @@ void MVKCmdCopyImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
         // Copy from source image to buffer
         // Create and execute a temporary buffer image command.
         // To be threadsafe...do NOT acquire and return the command from the pool.
-        cpyCmd.setContent(cmdEncoder->_cmdBuffer, tempBuff, (VkImage)_srcImage, _srcLayout, copyCnt, vkSrcCopies, false);
+        cpyCmd.setContent(cmdEncoder->_cmdBuffer, tempBuff, (VkImage)_srcImage, _srcLayout, copyCnt, vkSrcCopies.data(), false);
         cpyCmd.encode(cmdEncoder);
 
         // Copy from buffer to destination image
         // Create and execute a temporary buffer image command.
         // To be threadsafe...do NOT acquire and return the command from the pool.
-        cpyCmd.setContent(cmdEncoder->_cmdBuffer, tempBuff, (VkImage)_dstImage, _dstLayout, copyCnt, vkDstCopies, true);
+        cpyCmd.setContent(cmdEncoder->_cmdBuffer, tempBuff, (VkImage)_dstImage, _dstLayout, copyCnt, vkDstCopies.data(), true);
         cpyCmd.encode(cmdEncoder);
     }
 }
@@ -483,8 +483,8 @@ void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
 
 	auto& mtlFeats = cmdEncoder->getMetalFeatures();
 	size_t vkIBCnt = _vkImageBlits.size();
-	VkImageCopy vkImageCopies[vkIBCnt];
-	MVKImageBlitRender mvkBlitRenders[vkIBCnt];
+	MVKSmallVector<VkImageCopy, 4> vkImageCopies(vkIBCnt);
+	MVKSmallVector<MVKImageBlitRender, 4> mvkBlitRenders(vkIBCnt);
 	uint32_t copyCnt = 0;
 	uint32_t blitCnt = 0;
 
@@ -518,7 +518,7 @@ void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
 		copyCmd.setContent(cmdEncoder->_cmdBuffer,
 						   (VkImage)_srcImage, _srcLayout,
 						   (VkImage)_dstImage, _dstLayout,
-						   copyCnt, vkImageCopies);
+						   copyCnt, vkImageCopies.data());
 		copyCmd.encode(cmdEncoder, kMVKCommandUseBlitImage);
 	}
 
@@ -809,8 +809,8 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 	auto& mtlFeats = cmdEncoder->getMetalFeatures();
 	size_t vkIRCnt = _vkImageResolves.size();
-	VkImageBlit expansionRegions[vkIRCnt];
-	VkImageCopy copyRegions[vkIRCnt];
+	MVKSmallVector<VkImageBlit, 4> expansionRegions(vkIRCnt);
+	MVKSmallVector<VkImageCopy, 4> copyRegions(vkIRCnt);
 
 	// If we can do layered rendering to a multisample texture, I can resolve all the layers at once.
 	uint32_t layerCnt = 0;
@@ -824,7 +824,7 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 			layerCnt += dstLayCnt;
 		}
 	}
-	MVKMetalResolveSlice mtlResolveSlices[layerCnt];
+	MVKSmallVector<MVKMetalResolveSlice, 8> mtlResolveSlices(layerCnt);
 
 	uint32_t expCnt = 0;
 	uint32_t copyCnt = 0;
@@ -908,7 +908,7 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 			MVKCmdBlitImage<N> expCmd;
 			expCmd.setContent(cmdEncoder->_cmdBuffer,
 							  (VkImage)_dstImage, _dstLayout, (VkImage)xfrImage, _dstLayout,
-							  expCnt, expansionRegions, VK_FILTER_LINEAR);
+							  expCnt, expansionRegions.data(), VK_FILTER_LINEAR);
 			expCmd.encode(cmdEncoder, kMVKCommandUseResolveExpandImage);
 		}
 
@@ -917,7 +917,7 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		copyCmd.setContent(cmdEncoder->_cmdBuffer,
 						   (VkImage)_srcImage, _srcLayout,
 						   (VkImage)xfrImage, _dstLayout,
-						   copyCnt, copyRegions);
+						   copyCnt, copyRegions.data());
 		copyCmd.encode(cmdEncoder, kMVKCommandUseResolveCopyImage);
 	}
 
@@ -1384,14 +1384,14 @@ template <size_t N>
 void MVKCmdClearAttachments<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 	uint32_t vtxCnt = getVertexCount(cmdEncoder);
-	simd::float4 vertices[vtxCnt];
+	MVKSmallVector<simd::float4, 6 * 4> vertices(vtxCnt);	// Inline space for four single-layer rectangles.
 	simd::float4 clearColors[kMVKClearAttachmentCount];
 	MVKRPSKeyClearAtt rpsKey;
 
 	VkRect2D renderArea = cmdEncoder->clipToRenderArea({{0, 0}, cmdEncoder->getFramebufferExtent()});
 	VkExtent2D fbExtent = {renderArea.offset.x + renderArea.extent.width, renderArea.offset.y + renderArea.extent.height};
 
-	populateVertices(cmdEncoder, vertices, fbExtent.width, fbExtent.height);
+	populateVertices(cmdEncoder, vertices.data(), fbExtent.width, fbExtent.height);
 
 	MVKPixelFormats* pixFmts = cmdEncoder->getPixelFormats();
     MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
@@ -1446,7 +1446,7 @@ void MVKCmdClearAttachments<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->getMtlGraphics().prepareHelperDraw(mtlRendEnc, *cmdEncoder, state);
 	cmdEncoder->setVertexBytes(mtlRendEnc, clearColors, sizeof(clearColors), 0);
 	cmdEncoder->setFragmentBytes(mtlRendEnc, clearColors, sizeof(clearColors), 0);
-	cmdEncoder->setVertexBytes(mtlRendEnc, vertices, vtxCnt * sizeof(vertices[0]),
+	cmdEncoder->setVertexBytes(mtlRendEnc, vertices.data(), vtxCnt * sizeof(vertices[0]),
 	                           cmdEncoder->getDevice()->getMetalBufferIndexForVertexAttributeBinding(kMVKVertexContentBufferIndex));
     [mtlRendEnc drawPrimitives: MTLPrimitiveTypeTriangle vertexStart: 0 vertexCount: vtxCnt];
     [mtlRendEnc popDebugGroup];

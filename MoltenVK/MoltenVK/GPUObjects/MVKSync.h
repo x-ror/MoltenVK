@@ -22,7 +22,6 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
-#include <unordered_set>
 
 class MVKFenceSitter;
 
@@ -341,8 +340,8 @@ public:
 
 protected:
 	id<MTLSharedEvent> _mtlEvent = nil;
-	std::mutex _lock;
-	std::unordered_set<MVKFenceSitter*> _sitters;
+	MVKUnfairLock _lock;
+	MVKSmallVector<MVKFenceSitter*, 2> _sitters;
 };
 
 
@@ -395,8 +394,8 @@ protected:
 	void propagateDebugName() override {}
 	void notifySitters();
 
-	std::mutex _lock;
-	std::unordered_set<MVKFenceSitter*> _fenceSitters;
+	MVKUnfairLock _lock;
+	MVKSmallVector<MVKFenceSitter*, 2> _fenceSitters;
 	bool _isSignaled;
 };
 

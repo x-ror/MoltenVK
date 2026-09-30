@@ -31,6 +31,7 @@
 #include <string>
 #include <simd/simd.h>
 #include <type_traits>
+#include <os/lock.h>
 
 
 #pragma mark Math
@@ -494,6 +495,27 @@ static constexpr typename std::common_type<T, U>::type mvkLeastCommonMultiple(T 
 	typedef typename std::common_type<T, U>::type R;
 	return (a == 0 && b == 0) ? 0 : MVKAbs<R, T>::eval(a) / mvkGreatestCommonDivisor(a, b) * MVKAbs<R, U>::eval(b);
 }
+
+
+#pragma mark Locking
+
+/**
+ * A small, non-recursive lock that satisfies the BasicLockable requirements, so it can be
+ * used with std::lock_guard. It wraps os_unfair_lock, which is 4 bytes, where std::mutex is
+ * 64 bytes on Darwin. Use it for locks embedded in objects that are created in large numbers,
+ * and that never wait on a condition variable or lock recursively.
+ */
+class MVKUnfairLock {
+public:
+	MVKUnfairLock() = default;
+	MVKUnfairLock(const MVKUnfairLock&) = delete;
+	MVKUnfairLock& operator=(const MVKUnfairLock&) = delete;
+	void lock() { os_unfair_lock_lock(&_lock); }
+	void unlock() { os_unfair_lock_unlock(&_lock); }
+	bool try_lock() { return os_unfair_lock_trylock(&_lock); }
+private:
+	os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;
+};
 
 
 #pragma mark Hashing

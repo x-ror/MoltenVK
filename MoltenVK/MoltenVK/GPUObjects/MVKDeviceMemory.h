@@ -164,7 +164,7 @@ protected:
 
 	MVKSmallVector<MVKBuffer*, 4> _buffers;
 	MVKSmallVector<MVKImageMemoryBinding*, 4> _imageMemoryBindings;
-	std::mutex _rezLock;
+	MVKUnfairLock _rezLock;
     VkDeviceSize _allocationSize = 0;
 	MVKMappedMemoryRange _mappedRange;
 	// Resource object that spans the whole VkDeviceMemory or supposedly does for the user.

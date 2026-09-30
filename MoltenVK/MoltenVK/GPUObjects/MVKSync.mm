@@ -209,17 +209,17 @@ void MVKTimelineSemaphoreMTLEvent::signal(const VkSemaphoreSignalInfo* pSignalIn
 
 bool MVKTimelineSemaphoreMTLEvent::registerWait(MVKFenceSitter* sitter, const VkSemaphoreWaitInfo* pWaitInfo, uint32_t index) {
 	if (_mtlEvent.signaledValue >= pWaitInfo->pValues[index]) { return true; }
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 	sitter->await();
-	auto addRslt = _sitters.insert(sitter);
-	if (addRslt.second) {
+	if ( !mvkContains(_sitters, sitter) ) {
+		_sitters.push_back(sitter);
 		retain();
 		_device->addSemaphore(&sitter->_blocker);
 		[_mtlEvent notifyListener: sitter->getMTLSharedEventListener()
 						  atValue: pWaitInfo->pValues[index]
 							block: ^(id<MTLSharedEvent>, uint64_t) {
-			lock_guard<mutex> blockLock(_lock);
-			if (_sitters.count(sitter)) { sitter->signaled(); }
+			lock_guard<MVKUnfairLock> blockLock(_lock);
+			if (mvkContains(_sitters, sitter)) { sitter->signaled(); }
 			release();
 		}];
 	}
@@ -227,9 +227,9 @@ bool MVKTimelineSemaphoreMTLEvent::registerWait(MVKFenceSitter* sitter, const Vk
 }
 
 void MVKTimelineSemaphoreMTLEvent::unregisterWait(MVKFenceSitter* sitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 	_device->removeSemaphore(&sitter->_blocker);
-	_sitters.erase(sitter);
+	mvkRemoveFirstOccurance(_sitters, sitter);
 }
 
 MVKTimelineSemaphoreMTLEvent::MVKTimelineSemaphoreMTLEvent(MVKDevice* device,
@@ -257,29 +257,29 @@ MVKTimelineSemaphoreMTLEvent::~MVKTimelineSemaphoreMTLEvent() {
 #pragma mark MVKFence
 
 void MVKFence::addSitter(MVKFenceSitter* fenceSitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	// We only care about unsignaled fences. If already signaled,
 	// don't add myself to the sitter and don't signal the sitter.
 	if (_isSignaled) { return; }
 
 	// Ensure each fence only added once to each fence sitter
-	auto addRslt = _fenceSitters.insert(fenceSitter);	// pair with second element true if was added
-	if (addRslt.second) {
+	if ( !mvkContains(_fenceSitters, fenceSitter) ) {
+		_fenceSitters.push_back(fenceSitter);
 		_device->addSemaphore(&fenceSitter->_blocker);
 		fenceSitter->await();
 	}
 }
 
 void MVKFence::removeSitter(MVKFenceSitter* fenceSitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	_device->removeSemaphore(&fenceSitter->_blocker);
-	_fenceSitters.erase(fenceSitter);
+	mvkRemoveFirstOccurance(_fenceSitters, fenceSitter);
 }
 
 void MVKFence::signal() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	if (_isSignaled) { return; }	// Only signal once
 	_isSignaled = true;
@@ -292,14 +292,14 @@ void MVKFence::signal() {
 }
 
 void MVKFence::reset() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	_isSignaled = false;
 	_fenceSitters.clear();
 }
 
 bool MVKFence::getIsSignaled() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	return _isSignaled;
 }

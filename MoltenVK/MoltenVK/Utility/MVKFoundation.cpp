@@ -145,15 +145,13 @@ bool mvkSupportsBufferDeviceAddress() { return mvkOSVersionIsAtLeast(13.0, 16.0,
 void mvkFlipVertically(void* rowMajorData, uint32_t rowCount, size_t bytesPerRow) {
 	if ( !rowMajorData ) return;		// If no data, nothing to flip!
 
-	uint8_t tmpRow[bytesPerRow];
+	// Swap the rows in place, so no temporary row is needed on the stack.
 	uint32_t lastRowIdx = rowCount - 1;
 	uint32_t halfRowCnt = rowCount / 2;
 	for (uintptr_t rowIdx = 0; rowIdx < halfRowCnt; rowIdx++) {
 		uint8_t* lowerRow = (uint8_t*)((uintptr_t)rowMajorData + (bytesPerRow * rowIdx));
 		uint8_t* upperRow = (uint8_t*)((uintptr_t)rowMajorData + (bytesPerRow * (lastRowIdx - rowIdx)));
-		memcpy(tmpRow, upperRow, bytesPerRow);
-		memcpy(upperRow, lowerRow, bytesPerRow);
-		memcpy(lowerRow, tmpRow, bytesPerRow);
+		std::swap_ranges(lowerRow, lowerRow + bytesPerRow, upperRow);
 	}
 }
 

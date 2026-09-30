@@ -90,7 +90,7 @@ protected:
     uint32_t _bytesPerBlock;
     MTLPixelFormat _mtlPixFmt;
     id<MTLTexture> _mtlTexture;
-    std::unordered_map<NSUInteger, id<MTLTexture>> _mtlTextureViews;
+    MVKSmallVector<std::pair<MTLPixelFormat, id<MTLTexture>>, 2> _mtlTextureViews;	// Images rarely have more than a couple of view formats.
     MVKSmallVector<MVKImageSubresource, 1> _subresources;
     HeapAllocation _heapAllocation;
 };
@@ -388,7 +388,7 @@ protected:
 	VkImageUsageFlags _stencilUsage;
     VkFormat _vkFormat;
 	MTLTextureType _mtlTextureType;
-    std::mutex _lock;
+    MVKUnfairLock _lock;
     IOSurfaceRef _ioSurface;
 	VkDeviceSize _rowByteAlignment;
     bool _isDepthStencilAttachment;
@@ -430,7 +430,7 @@ protected:
 
 	void detachSwapchain();
 
-	std::mutex _detachmentLock;
+	MVKUnfairLock _detachmentLock;
 	MVKSwapchain* _swapchain;
 	uint32_t _swapchainIndex;
 };
@@ -511,7 +511,7 @@ protected:
 	MVKSwapchainImageAvailability _availability;
 	MVKSmallVector<MVKSwapchainSignaler, 1> _availabilitySignalers;
 	MVKSwapchainSignaler _preSignaler = {};
-	std::mutex _availabilityLock;
+	MVKUnfairLock _availabilityLock;
 	uint64_t _beginPresentTime = 0;
 	uint64_t _presentationStartTime = 0;
 };
@@ -659,7 +659,7 @@ protected:
     MVKSmallVector<MVKImageViewPlane*, 3> _planes;
     VkImageSubresourceRange _subresourceRange;
     VkImageUsageFlags _usage;
-	std::mutex _lock;
+	MVKUnfairLock _lock;
 	MTLTextureType _mtlTextureType;
 };
 
