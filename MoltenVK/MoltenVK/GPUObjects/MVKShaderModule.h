@@ -157,7 +157,7 @@ protected:
 	MVKShaderLibrary* getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo);
 	void ensureCompiled();
 	/** Returns whether this library should be written to pipeline cache data. Libraries whose compile failed are not. */
-	bool isSerializable() const { return _mtlLibrary || _isCompileDeferred; }
+	bool isSerializable() const { return _isCompileDeferred || _mtlLibrary; }
 	bool ensureBaseMTLFunction(VkPipelineCreationFeedback* pShaderFeedback, MVKShaderModule* shaderModule);
 	id<MTLFunction> getSpecializedMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 											  VkPipelineCreationFeedback* pShaderFeedback,
@@ -177,7 +177,7 @@ protected:
 
 	/** When true, representing a library created with source, but never specialized */
 	bool _maySpecializeWithMacro;
-	/** When true, the MTLLibrary has not been compiled yet. Cleared under _functionsLock by ensureCompiled(). */
+	/** When true, the MTLLibrary has not been compiled yet. Cleared by ensureCompiled() after _mtlLibrary is set. */
 	std::atomic<bool> _isCompileDeferred { false };
 	/** Can only be populated when _maySpecializeWithMacro is true. Guarded by _variantsLock. */
 	std::map<std::vector<std::pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary *> _specializationVariants;
