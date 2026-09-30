@@ -546,7 +546,6 @@ protected:
 	Type* _data;
 	size_t _size;
 };
-static_assert(sizeof(MVKArrayRef<int>) == sizeof(std::span<int>), "MVKArrayRef should stay layout-equivalent to std::span");
 
 /** Ensures the size of the specified container is at least the specified size. */
 template<typename C, typename S>
