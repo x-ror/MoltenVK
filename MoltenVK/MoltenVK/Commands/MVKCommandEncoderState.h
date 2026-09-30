@@ -308,6 +308,13 @@ struct MVKMetalGraphicsCommandEncoderStateQuickReset {
 	 */
 	MVKOnePerGraphicsStage<MVKStageResourceBits> _exists;
 
+	/**
+	 * The pipeline stage resources whose descriptor bind script was last fully executed on each
+	 * stage, with no descriptor-slot change since. Null (as after a reset) means the script must run.
+	 * See bindMetalResources().
+	 */
+	MVKOnePerGraphicsStage<const MVKPipelineStageResourceInfo*> _boundResources;
+
 	id<MTLRenderPipelineState> _pipeline;
 
 	/** Flags that mark whether a render state matches the current Vulkan render state. */
@@ -357,6 +364,8 @@ struct MVKMetalGraphicsCommandEncoderState : public MVKMetalGraphicsCommandEncod
 
 	/** Mark the given pieces of render state as dirty. */
 	void markDirty(MVKRenderStateFlags flags) { _stateReady.removeAll(flags); }
+	/** Requires the descriptor bind scripts of all stages to run again before the next draw. */
+	void invalidateBoundResources() { _boundResources = {}; }
 	/** Mark everything dirty that needs to be marked when changing pipelines. */
 	void changePipeline(MVKGraphicsPipeline* from, MVKGraphicsPipeline* to);
 
@@ -386,6 +395,9 @@ struct MVKMetalComputeCommandEncoderState {
 	 */
 	MVKStageResourceBits _exists;
 
+	/** The compute equivalent of MVKMetalGraphicsCommandEncoderStateQuickReset::_boundResources. */
+	const MVKPipelineStageResourceInfo* _boundResources;
+
 	id<MTLComputePipelineState> _pipeline;
 
 	MVKPipeline* _vkPipeline;
@@ -409,6 +421,8 @@ struct MVKMetalComputeCommandEncoderState {
 
 	/** For API compatibility with MVKMetalGraphicsCommandEncoderState. */
 	MVKArrayRef<MVKStageResourceBits> exists() { return {&_exists, 1}; }
+	/** Requires the descriptor bind script to run again before the next dispatch. */
+	void invalidateBoundResources() { _boundResources = nullptr; }
 
 	void reset();
 };
