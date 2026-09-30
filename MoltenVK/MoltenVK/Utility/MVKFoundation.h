@@ -439,8 +439,9 @@ static constexpr bool mvkFits(const Tval& val) {
 }
 
 /** Clamps the value between the lower and upper bounds, inclusive. */
+/** Returns a copy, so the result never refers to a temporary argument. Unlike std::clamp(), lower may exceed upper. */
 template<typename T>
-static constexpr const T& mvkClamp(const T& val, const T& lower, const T& upper) {
+static constexpr T mvkClamp(const T& val, const T& lower, const T& upper) {
     return std::min(std::max(val, lower), upper);
 }
 
@@ -640,8 +641,9 @@ static constexpr const T& mvkSelectPlatformValue(const T& macOSVal, const T& iOS
  */
 template<typename T>
 static void mvkClear(T* pDst, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkClear() writes bytes, so it requires a trivially copyable type.");
 	if ( !pDst ) { return; }					// Bad pointer
-	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); } }  // Fast clear of a single primitive
+	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); return; } }  // Fast clear of a single primitive
 	memset(pDst, 0, sizeof(T) * count);			// Memory clear of complex content or array
 }
 
@@ -659,6 +661,7 @@ static void mvkClear(const T* pVal, size_t count = 1) { mvkClear((T*)pVal, count
  */
 template<typename T>
 static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
+	static_assert(std::is_void_v<T> || std::is_trivially_copyable_v<T>, "mvkCopy() copies bytes, so it requires a trivially copyable type.");
 	if ( !pDst || !pSrc ) { return; }				// Bad pointers
 	if (pDst == pSrc) { return; }					// Same object
 
@@ -680,6 +683,7 @@ static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
  */
 template<typename T>
 static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkAreEqual() compares bytes, so it requires a trivially copyable type.");
 	if (count == 0) { return true; }					// Empty ranges are equal, even with null pointers (e.g. an empty MVKArrayRef)
 	if ( !pV1 || !pV2 ) { return false; }				// Bad pointers
 	if (pV1 == pV2) { return true; }					// Same object
