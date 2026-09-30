@@ -27,6 +27,7 @@ Released TBD
 - Fix spurious warning about blending on attachment formats that do not support it.
 - Fix `VkDeviceMemory` imported from a `MTLTexture` not backing the image bound to it, and over-releasing that texture.
 - Fix leak of the `MTLBuffer` of a host-coherent `VkDeviceMemory` that also holds a `MTLTexture`.
+- Fix pipeline stage creation feedback being written beyond `pipelineStageCreationFeedbackCount`, and a crash in compute pipeline creation when no stage feedback array is provided.
 - Build MoltenVK with `C++20` (Xcode and CMake). CMake builds now default to `Release` and hidden symbol visibility.
 - Allow shader conversion and `MTLLibrary` compilation to proceed in parallel across threads sharing a `VkPipelineCache`.
 - Cache `MTLFunction` specializations and SPIR-V interface reflection per shader module, and compile libraries restored from `VkPipelineCache` data on first use instead of when the cache is created.
