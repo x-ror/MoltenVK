@@ -25,6 +25,7 @@
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <MoltenVKShaderConverter/SPIRVReflection.h>
 #include <atomic>
+#include <compare>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -362,7 +363,8 @@ protected:
 		spv::ExecutionModel model;
 		spv::StorageClass storage;
 		std::string entryName;
-		auto operator<=>(const InterfaceReflectionKey&) const = default;
+		// An explicit ordering falls back to operator< for std::string on libc++ versions without operator<=>.
+		std::weak_ordering operator<=>(const InterfaceReflectionKey&) const = default;
 	};
 	struct InterfaceReflection {
 		std::vector<mvk::SPIRVShaderInterfaceVariable> vars;
@@ -373,7 +375,7 @@ protected:
 		std::string tescEntryName;
 		MVKShaderModuleKey teseKey;
 		std::string teseEntryName;
-		auto operator<=>(const TessReflectionKey&) const = default;
+		std::weak_ordering operator<=>(const TessReflectionKey&) const = default;
 	};
 	struct TessReflection {
 		mvk::SPIRVTessReflectionData data;
