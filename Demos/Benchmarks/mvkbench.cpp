@@ -31,6 +31,9 @@
  *              and measures the wall-clock time and scaling.
  *   cache      Measures vkCreatePipelineCache() with a populated cache blob, and the creation
  *              of pipelines from it.
+ *   launch     Creates one batch of pipelines as an app would at launch, optionally from a
+ *              VkPipelineCache kept in a file between processes, with a breakdown of the
+ *              compilation steps. Used with --seed by launch_benchmarks.sh to measure warm launches.
  *
  * See README.md for usage.
  */
@@ -46,6 +49,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdarg>
+#include <fstream>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -164,8 +168,11 @@ MVKB_DEVICE_FUNCS(MVKB_DECLARE_FUNC)
 static PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
 static PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR = nullptr;
 
+static void* gLibrary = nullptr;
+
 static void loadLibrary(const string& path) {
 	void* lib = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+	gLibrary = lib;
 	if ( !lib ) { fail("cannot load Vulkan library '%s': %s", path.c_str(), dlerror()); }
 	vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
 	if ( !vkGetInstanceProcAddr ) { fail("'%s' does not export vkGetInstanceProcAddr", path.c_str()); }
@@ -222,10 +229,12 @@ struct Options {
 	vector<uint32_t> threads = {1, 2, 4, 8};
 	string mode = "unique";		// unique | spec | same
 	bool useCache = true;
+	uint32_t seed = 0;			// First patched shader value, or 0 for a random one
+	string cacheFile;			// VkPipelineCache data file for the launch scenario
 };
 
 static void usage() {
-	printf("Usage: mvkbench [options] [draw|pipelines|cache|all]\n"
+	printf("Usage: mvkbench [options] [draw|pipelines|cache|launch|all]\n"
 		   "\n"
 		   "Options:\n"
 		   "  --lib PATH          Vulkan library to load (default: libMoltenVK.dylib on macOS, libvulkan.so.1 elsewhere)\n"
@@ -237,7 +246,11 @@ static void usage() {
 		   "  --threads LIST      Comma-separated thread counts for the pipelines scenario (default 1,2,4,8)\n"
 		   "  --mode MODE         Pipeline variety: unique (distinct shaders), spec (one shader, distinct\n"
 		   "                      specialization constants), same (identical pipelines). Default unique.\n"
-		   "  --no-cache          Create pipelines without a VkPipelineCache\n");
+		   "  --no-cache          Create pipelines without a VkPipelineCache\n"
+		   "  --seed N            Generate the same shaders on every run from N (1..8000000), so Metal's\n"
+		   "                      on-disk shader cache can serve a later run. Default: random.\n"
+		   "  --cache-file PATH   launch scenario: load the VkPipelineCache from PATH if it exists,\n"
+		   "                      and save it there afterwards\n");
 }
 
 static vector<uint32_t> parseList(const char* s) {
@@ -271,12 +284,15 @@ static Options parseOptions(int argc, char** argv) {
 		else if (arg == "--threads") { opts.threads = parseList(next()); }
 		else if (arg == "--mode") { opts.mode = next(); }
 		else if (arg == "--no-cache") { opts.useCache = false; }
+		else if (arg == "--seed") { opts.seed = parseList(next())[0]; }
+		else if (arg == "--cache-file") { opts.cacheFile = next(); }
 		else if (arg == "-h" || arg == "--help") { usage(); exit(0); }
 		else if (arg[0] != '-') { opts.scenario = arg; }
 		else { usage(); fail("unknown option '%s'", arg.c_str()); }
 	}
 	if (opts.mode != "unique" && opts.mode != "spec" && opts.mode != "same") { fail("unknown mode '%s'", opts.mode.c_str()); }
-	if (opts.scenario != "all" && opts.scenario != "draw" && opts.scenario != "pipelines" && opts.scenario != "cache") {
+	if (opts.seed > 8000000) { fail("--seed must be between 1 and 8000000"); }
+	if (opts.scenario != "all" && opts.scenario != "draw" && opts.scenario != "pipelines" && opts.scenario != "cache" && opts.scenario != "launch") {
 		fail("unknown scenario '%s'", opts.scenario.c_str());
 	}
 	return opts;
@@ -948,12 +964,16 @@ static void runDrawScenario(const Context& ctx, const Options& opts) {
 
 #pragma mark - Pipeline creation scenarios
 
-// Values patched into the shaders and used as specialization constants. They start at a random
-// point on every run, so the generated MSL differs between runs and Metal's on-disk shader cache
-// cannot serve compiled libraries from an earlier run. All values stay exactly representable
-// as floats, which are exact for integers below 2^24.
+// Values patched into the shaders and used as specialization constants. By default they start at a
+// random point on every run, so the generated MSL differs between runs and Metal's on-disk shader
+// cache cannot serve compiled libraries from an earlier run. With --seed, they start at the given
+// value, so runs with the same seed generate the same shaders. All values stay exactly
+// representable as floats, which are exact for integers below 2^24.
+static uint32_t gSeed = 0;
+
 static uint32_t nextUniqueValue() {
 	static uint32_t next = [] {
+		if (gSeed) { return gSeed; }
 		random_device rd;
 		return 1 + (uint32_t)(rd() % 8000000u);
 	}();
@@ -1209,17 +1229,139 @@ static void runCacheScenario(const Context& ctx, const Options& opts) {
 }
 
 
+#pragma mark - Launch scenario
+
+// Mirrors the start of MVKPerformanceStatistics from MoltenVK's mvk_private_api.h, which
+// vkGetPerformanceStatisticsMVK() fills up to the size passed in.
+struct MVKBPerformanceTracker { uint32_t count; double latest, previous, average, minimum, maximum; };
+struct MVKBPerformanceStatistics {
+	MVKBPerformanceTracker shaderCompilation[11];	// MVKShaderCompilationPerformance
+	MVKBPerformanceTracker pipelineCache[3];		// MVKPipelineCachePerformance
+};
+enum { kPerfSpirvToMSL = 1, kPerfMSLCompile = 2, kPerfShaderLibraryFromCache = 6,
+	   kPerfFunctionRetrieval = 7, kPerfFunctionSpecialization = 8, kPerfPipelineCompile = 9 };
+typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVKB)(VkDevice, MVKBPerformanceStatistics*, size_t*);
+
+// Returns MoltenVK's performance statistics, or false if the library is not MoltenVK.
+static bool getMoltenVKPerformance(const Context& ctx, MVKBPerformanceStatistics& stats) {
+	auto fn = (PFN_vkGetPerformanceStatisticsMVKB)dlsym(gLibrary, "vkGetPerformanceStatisticsMVK");
+	if ( !fn ) { return false; }
+	size_t size = sizeof(stats);
+	VkResult rslt = fn(ctx.device, &stats, &size);
+	return (rslt == VK_SUCCESS || rslt == VK_INCOMPLETE) && size == sizeof(stats);
+}
+
+static bool readFile(const string& path, vector<uint8_t>& data) {
+	ifstream f(path, ios::binary);
+	if ( !f ) { return false; }
+	data.assign(istreambuf_iterator<char>(f), istreambuf_iterator<char>());
+	return true;
+}
+
+static void writeFile(const string& path, const vector<uint8_t>& data) {
+	ofstream f(path, ios::binary | ios::trunc);
+	if ( !f ) { fail("cannot write '%s'", path.c_str()); }
+	f.write((const char*)data.data(), data.size());
+}
+
+// Creates one batch of pipelines from the largest --threads count, the way an app does at launch.
+// With --cache-file, the VkPipelineCache is loaded from the file if it exists, and saved to it
+// afterwards, so a later process can start from it. Run with --seed, so later processes generate
+// the same shaders. The time includes the Metal compiler, and Metal's on-disk shader cache.
+static void runLaunchScenario(const Context& ctx, const Options& opts) {
+	uint32_t threadCount = *max_element(opts.threads.begin(), opts.threads.end());
+	bool useCache = opts.useCache || !opts.cacheFile.empty();
+	vector<uint8_t> initialData;
+	bool isRestored = !opts.cacheFile.empty() && readFile(opts.cacheFile, initialData) && !initialData.empty();
+	const char* cacheState = isRestored ? "restored VkPipelineCache" : (useCache ? "empty VkPipelineCache" : "no VkPipelineCache");
+	printf("\n== launch: %u pipelines, mode %s, %u threads, %s, seed %u ==\n",
+		   opts.pipelines, opts.mode.c_str(), threadCount, cacheState, opts.seed);
+	if ( !opts.seed ) { printf("Note: without --seed, every run generates new shaders, so Metal's shader cache never hits.\n"); }
+
+	PipelineResources res = createPipelineResources(ctx);
+	PipelineBatch batch = createPipelineBatch(ctx, opts.mode, opts.pipelines);
+
+	auto t0 = Clock::now();
+	VkPipelineCache cache = useCache ? createPipelineCache(ctx, isRestored ? &initialData : nullptr) : VK_NULL_HANDLE;
+	double createCacheMs = msSince(t0);
+
+	vector<VkPipeline> pipelines;
+	double wallMs = createPipelinesInParallel(ctx, res, batch, opts.pipelines, threadCount, cache, pipelines);
+
+	MVKBPerformanceStatistics perf = {};
+	bool hasPerf = getMoltenVKPerformance(ctx, perf);
+
+	double saveMs = 0.0;
+	size_t blobSize = initialData.size();
+	if ( !opts.cacheFile.empty() ) {
+		auto t1 = Clock::now();
+		size_t size = 0;
+		VK_CHECK(vkGetPipelineCacheData(ctx.device, cache, &size, nullptr));
+		vector<uint8_t> blob(size);
+		VK_CHECK(vkGetPipelineCacheData(ctx.device, cache, &size, blob.data()));
+		blob.resize(size);
+		saveMs = msSince(t1);
+		writeFile(opts.cacheFile, blob);
+		blobSize = blob.size();
+	}
+
+	string variant = opts.mode + "_t" + to_string(threadCount);
+	printf("%-36s %10.1f KB\n", "cache data size", blobSize / 1024.0);
+	printf("%-36s %10.2f ms\n", "vkCreatePipelineCache", createCacheMs);
+	printf("%-36s %10.2f ms\n", "create pipelines (wall)", wallMs);
+	if ( !opts.cacheFile.empty() ) { printf("%-36s %10.2f ms\n", "vkGetPipelineCacheData", saveMs); }
+	result("launch", variant, "restored", isRestored ? 1.0 : 0.0);
+	result("launch", variant, "blob_kb", blobSize / 1024.0);
+	result("launch", variant, "create_cache_ms", createCacheMs);
+	result("launch", variant, "wall_ms", wallMs);
+	if ( !opts.cacheFile.empty() ) { result("launch", variant, "save_cache_ms", saveMs); }
+
+	// MoltenVK's own timings, summed over all threads, so they can exceed the wall time.
+	if (hasPerf && perf.shaderCompilation[kPerfPipelineCompile].count == 0) {
+		printf("MoltenVK compilation breakdown unavailable: performance tracking is off.\n");
+	} else if (hasPerf) {
+		struct { const char* name; const char* metric; int idx; } steps[] = {
+			{ "SPIR-V to MSL",                "spirv_to_msl_ms",     kPerfSpirvToMSL },
+			{ "MSL to MTLLibrary (front end)", "msl_compile_ms",      kPerfMSLCompile },
+			{ "shader library from cache",    "library_from_cache_ms", kPerfShaderLibraryFromCache },
+			{ "MTLFunction retrieval",        "function_ms",         kPerfFunctionRetrieval },
+			{ "MTLFunction specialization",   "specialization_ms",   kPerfFunctionSpecialization },
+			{ "pipeline state (back end)",    "pipeline_compile_ms", kPerfPipelineCompile },
+		};
+		printf("MoltenVK timings, summed over threads:\n");
+		for (auto& step : steps) {
+			const MVKBPerformanceTracker& t = perf.shaderCompilation[step.idx];
+			double total = t.count * t.average;
+			printf("  %-34s %10.2f ms  (%u)\n", step.name, total, t.count);
+			result("launch", variant, step.metric, total);
+		}
+	}
+
+	for (auto p : pipelines) { vkDestroyPipeline(ctx.device, p, nullptr); }
+	if (cache) { vkDestroyPipelineCache(ctx.device, cache, nullptr); }
+	destroyPipelineBatch(ctx, batch);
+	destroyPipelineResources(ctx, res);
+}
+
+
 #pragma mark - Main
 
 int main(int argc, char** argv) {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	Options opts = parseOptions(argc, argv);
+	gSeed = opts.seed;
+
+	// The launch scenario reports MoltenVK's breakdown of compilation time, which needs performance
+	// tracking. MoltenVK reads its configuration when it starts, so set it before loading it.
+	if (opts.scenario == "launch") { setenv("MVK_CONFIG_PERFORMANCE_TRACKING", "1", 0); }
+
 	loadLibrary(opts.libraryPath);
 	Context ctx = createContext(opts);
 
 	if (opts.scenario == "all" || opts.scenario == "draw")      { runDrawScenario(ctx, opts); }
 	if (opts.scenario == "all" || opts.scenario == "pipelines") { runPipelinesScenario(ctx, opts); }
 	if (opts.scenario == "all" || opts.scenario == "cache")     { runCacheScenario(ctx, opts); }
+	if (opts.scenario == "launch")                              { runLaunchScenario(ctx, opts); }
 
 	destroyContext(ctx);
 	return 0;
