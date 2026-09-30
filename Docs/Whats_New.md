@@ -50,6 +50,8 @@ Released TBD
 - Reduce memory per `VkCommandPool` by creating temporary `MTLBuffer` pools on first use and removing unused locks from command pools, and per buffer, image, view and device memory by using a 4-byte lock in place of `std::mutex`.
 - Create the barrier `MTLFence` objects of a device only when they can be used, read environment variables without building a dictionary per lookup, and replace variable-length stack arrays in transfer commands and device queries with small vectors.
 - Copy push descriptor writes into one block of storage reused across recordings, and fix the data of an inline uniform block pushed with `vkCmdPushDescriptorSet()` not being copied at record time.
+- Make `MVKSmallVector` iterators plain pointers, move and copy trivially copyable elements as blocks of bytes, and fix erasing an empty range from the middle of an `MVKSmallVector` moving the following elements onto themselves.
+- Add move operations to `MVKBitArray`, and require trivially copyable types in `mvkClear()`, `mvkCopy()` and `mvkAreEqual()`.
 
 
 

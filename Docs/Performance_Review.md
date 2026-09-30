@@ -291,6 +291,13 @@ pointers into it.
 
 ## 4. `MVKSmallVector` and the utility containers
 
+**Status:** 4.1 through 4.7 are implemented on this branch; 4.8 is left for incremental
+migration. The iterators are now pointers, but a `const` vector still hands out mutable
+iterators as before, since tightening that could break callers that can only be checked by an
+Xcode build. Testing the container against `std::vector` found that erasing an empty range
+from the middle moved every following element onto itself, which empties self-moved strings;
+an empty range is now a no-op.
+
 `MVKSmallVector` is used in about 116 places, most of them on the encode path, so it deserves
 its own section.
 

@@ -63,58 +63,11 @@ class MVKSmallVectorImpl
   
 public:
   using value_type = Type;
-  class iterator
-  {
-    const MVKSmallVectorImpl *vector;
-    size_t               index;
 
-  public:
-    using iterator_category = std::random_access_iterator_tag;
-    using value_type = Type;
-    using pointer = value_type*;
-    using reference = value_type&;
-    using difference_type = std::ptrdiff_t;
-    typedef difference_type diff_type;
-
-    iterator() : vector{ nullptr }, index{ 0 } { }
-    iterator( const size_t _index, const MVKSmallVectorImpl &_vector ) : vector{ &_vector }, index{ _index } { }
-
-    iterator &operator=( const iterator &it )
-    {
-      vector = it.vector;
-      index  = it.index;
-      return *this;
-    }
-
-    Type *operator->() const { return &vector->alc.ptr[index]; }
-    Type &operator*()  const { return  vector->alc.ptr[index]; }
-    operator Type*()   const { return &vector->alc.ptr[index]; }
-
-    bool operator==( const iterator &it ) const { return vector == it.vector && index == it.index; }
-    bool operator!=( const iterator &it ) const { return vector != it.vector || index != it.index; }
-
-    iterator& operator++()      {                 ++index; return *this; }
-    iterator  operator++( int ) { auto t = *this; ++index; return t; }
-    iterator& operator--()      {                 --index; return *this; }
-    iterator  operator--( int ) { auto t = *this; --index; return t; }
-
-    iterator operator+ (const diff_type n)   const { return iterator( index + n, *vector ); }
-    iterator& operator+= (const diff_type n)       { index += n; return *this; }
-    iterator operator- (const diff_type n)   const { return iterator( index - n, *vector ); }
-    iterator& operator-= (const diff_type n)       { index -= n; return *this; }
-
-    diff_type operator- (const iterator& it) const { return index - it.index; }
-
-    bool operator< (const iterator& it)  const { return index < it.index; }
-    bool operator<= (const iterator& it) const { return index <= it.index; }
-    bool operator> (const iterator& it)  const { return index > it.index; }
-    bool operator>= (const iterator& it) const { return index >= it.index; }
-
-    Type &operator[]( const diff_type i ) const { return vector->alc.ptr[index + i]; }
-
-    bool   is_valid()     const { return index < vector->alc.size(); }
-    size_t get_position() const { return index; }
-  };
+  // Iterators are plain pointers into the contiguous storage. Like the pointers returned
+  // by data(), they are invalidated by any operation that grows the storage.
+  using iterator = Type*;
+  using const_iterator = const Type*;
   using reverse_iterator = std::reverse_iterator<iterator>;
 
 private:
@@ -167,9 +120,16 @@ public:
     {
       alc.allocate( n );
 
-      for( size_t i = 0; i < n; ++i )
+      if constexpr( std::is_trivially_copyable_v<Type> )
       {
-        alc.construct( &alc.ptr[i], a.alc.ptr[i] );
+        memcpy( static_cast<void*>( alc.ptr ), static_cast<const void*>( a.alc.ptr ), n * sizeof( Type ) );
+      }
+      else
+      {
+        for( size_t i = 0; i < n; ++i )
+        {
+          alc.construct( &alc.ptr[i], a.alc.ptr[i] );
+        }
       }
 
       alc.num_elements_used = n;
@@ -223,7 +183,17 @@ public:
     {
       const auto n = a.size();
 
-      if( alc.num_elements_used == n )
+      if constexpr( std::is_trivially_copyable_v<Type> )
+      {
+        if( n > capacity() )
+        {
+          alc.num_elements_used = 0;
+          vector_ReAllocate( n );
+        }
+        if( n ) { memcpy( static_cast<void*>( alc.ptr ), static_cast<const void*>( a.alc.ptr ), n * sizeof( Type ) ); }
+        alc.num_elements_used = n;
+      }
+      else if( alc.num_elements_used == n )
       {
         for( size_t i = 0; i < n; ++i )
         {
@@ -286,8 +256,9 @@ public:
     alc.swap( a.alc );
   }
 
-  iterator begin() const { return iterator( 0, *this ); }
-  iterator end()   const { return iterator( alc.num_elements_used, *this ); }
+  // As before, a const vector hands out mutable iterators; the elements are not treated as part of its constness.
+  iterator begin() const { return alc.ptr; }
+  iterator end()   const { return alc.ptr + alc.num_elements_used; }
 
   reverse_iterator rbegin() const { return reverse_iterator( end() ); }
   reverse_iterator rend()   const { return reverse_iterator( begin() ); }
@@ -397,7 +368,11 @@ public:
     }
     else
     {
-      //if constexpr( !std::is_trivially_destructible<Type>::value )
+      if constexpr( std::is_trivially_destructible_v<Type> )
+      {
+        alc.num_elements_used = new_size;
+      }
+      else
       {
         while( alc.num_elements_used > new_size )
         {
@@ -405,10 +380,6 @@ public:
           alc.destruct( &alc.ptr[alc.num_elements_used] );
         }
       }
-      //else
-      //{
-      //  alc.num_elements_used = new_size;
-      //}
     }
   }
 
@@ -420,11 +391,11 @@ public:
 
   void erase( const iterator it )
   {
-    if( it.is_valid() )
+    if( it < end() )
     {
       --alc.num_elements_used;
 
-      for( size_t i = it.get_position(); i < alc.num_elements_used; ++i )
+      for( size_t i = it - alc.ptr; i < alc.num_elements_used; ++i )
       {
         alc.ptr[i] = std::move( alc.ptr[i + 1] );
       }
@@ -436,13 +407,15 @@ public:
 
   void erase( const iterator first, const iterator last )
   {
-    if( first.is_valid() )
+    if( first < end() )
     {
-      size_t last_pos = last.is_valid() ? last.get_position() : size();
-      size_t n = last_pos - first.get_position();
+      size_t first_pos = first - alc.ptr;
+      size_t last_pos = last < end() ? last - alc.ptr : size();
+      size_t n = last_pos - first_pos;
+      if( n == 0 ) { return; }    // An empty range removes nothing, and must not move elements onto themselves.
       alc.num_elements_used -= n;
 
-      for( size_t i = first.get_position(), e = last_pos; i < alc.num_elements_used && e < alc.num_elements_used + n; ++i, ++e )
+      for( size_t i = first_pos, e = last_pos; i < alc.num_elements_used && e < alc.num_elements_used + n; ++i, ++e )
       {
         alc.ptr[i] = std::move( alc.ptr[e] );
       }
@@ -458,12 +431,15 @@ public:
   // adds t before it and automatically resizes vector if necessary
   void insert( const iterator it, Type t )
   {
-    if( !it.is_valid() || alc.num_elements_used == 0 )
+    if( it >= end() || alc.num_elements_used == 0 )
     {
       push_back( std::move( t ) );
     }
     else
     {
+      // Take the position before growing the storage, which invalidates the iterator.
+      const size_t it_position = it - alc.ptr;
+
       if( alc.num_elements_used == capacity() )
         vector_ReAllocate( vector_GetNextCapacity() );
 
@@ -471,7 +447,6 @@ public:
       alc.construct( &alc.ptr[alc.num_elements_used], std::move( alc.ptr[alc.num_elements_used - 1] ) );
 
       // move the remaining elements
-      const size_t it_position = it.get_position();
       for( size_t i = alc.num_elements_used - 1; i > it_position; --i )
       {
         alc.ptr[i] = std::move( alc.ptr[i - 1] );
@@ -496,7 +471,7 @@ public:
     if( alc.num_elements_used == capacity() )
       vector_ReAllocate( vector_GetNextCapacity() );
 
-    alc.construct( &alc.ptr[alc.num_elements_used], std::forward<Type>( t ) );
+    alc.construct( &alc.ptr[alc.num_elements_used], std::move( t ) );
     ++alc.num_elements_used;
   }
 
@@ -522,57 +497,11 @@ class MVKSmallVectorImpl<Type*, Allocator>
 
 public:
   using value_type = Type*;
-  class iterator
-  {
-    MVKSmallVectorImpl *vector;
-    size_t         index;
 
-  public:
-    using iterator_category = std::random_access_iterator_tag;
-    using value_type = Type*;
-    using pointer = value_type*;
-    using reference = value_type&;
-    using difference_type = std::ptrdiff_t;
-    typedef difference_type diff_type;
-
-    iterator() : vector{ nullptr }, index{ 0 } { }
-    iterator( const size_t _index, MVKSmallVectorImpl &_vector ) : vector{ &_vector }, index{ _index } { }
-
-    iterator &operator=( const iterator &it )
-    {
-      vector = it.vector;
-      index = it.index;
-      return *this;
-    }
-
-    Type *&operator*() { return vector->alc[index]; }
-
-    bool operator==( const iterator &it ) const { return vector == it.vector && index == it.index; }
-    bool operator!=( const iterator &it ) const { return vector != it.vector || index != it.index; }
-
-    iterator& operator++()      { ++index; return *this; }
-    iterator  operator++( int ) { auto t = *this; ++index; return t; }
-    iterator& operator--()      {                 --index; return *this; }
-    iterator  operator--( int ) { auto t = *this; --index; return t; }
-
-    iterator operator+ (const diff_type n)   { return iterator( index + n, *vector ); }
-    iterator& operator+= (const diff_type n) { index += n; return *this; }
-    iterator operator- (const diff_type n)   { return iterator( index - n, *vector ); }
-    iterator& operator-= (const diff_type n) { index -= n; return *this; }
-
-    diff_type operator- (const iterator& it) { return index - it.index; }
-
-    bool operator< (const iterator& it)  { return index < it.index; }
-    bool operator<= (const iterator& it) { return index <= it.index; }
-    bool operator> (const iterator& it)  { return index > it.index; }
-    bool operator>= (const iterator& it) { return index >= it.index; }
-
-    const Type &operator[]( const diff_type i ) const { return vector->alc.ptr[index + i]; }
-    Type &operator[]( const diff_type i )             { return vector->alc.ptr[index + i]; }
-
-    bool   is_valid()     const { return index < vector->alc.size(); }
-    size_t get_position() const { return index; }
-  };
+  // Iterators are plain pointers into the contiguous storage. Like the pointers returned
+  // by data(), they are invalidated by any operation that grows the storage.
+  using iterator = Type**;
+  using const_iterator = Type* const*;
   using reverse_iterator = std::reverse_iterator<iterator>;
 
 private:
@@ -714,11 +643,12 @@ public:
     alc.swap( a.alc );
   }
 
-  iterator begin()        { return iterator( 0, *this ); }
-  iterator end()          { return iterator( alc.num_elements_used, *this ); }
+  // As before, a const vector hands out mutable iterators; the elements are not treated as part of its constness.
+  iterator begin() const { return alc.ptr; }
+  iterator end()   const { return alc.ptr + alc.num_elements_used; }
 
-  reverse_iterator rbegin()       { return reverse_iterator( end() ); }
-  reverse_iterator rend()         { return reverse_iterator( begin() ); }
+  reverse_iterator rbegin() const { return reverse_iterator( end() ); }
+  reverse_iterator rend()   const { return reverse_iterator( begin() ); }
 
   const MVKArrayRef<Type*> contents() const { return MVKArrayRef<Type*>(data(), size()); }
         MVKArrayRef<Type*> contents()       { return MVKArrayRef<Type*>(data(), size()); }
@@ -835,11 +765,11 @@ public:
 
   void erase( const iterator it )
   {
-    if ( it.is_valid() )
+    if ( it < end() )
     {
       --alc.num_elements_used;
 
-      for ( size_t i = it.get_position(); i < alc.num_elements_used; ++i )
+      for ( size_t i = it - alc.ptr; i < alc.num_elements_used; ++i )
       {
         alc.ptr[i] = alc.ptr[i + 1];
       }
@@ -848,13 +778,15 @@ public:
 
   void erase( const iterator first, const iterator last )
   {
-    if( first.is_valid() )
+    if( first < end() )
     {
-      size_t last_pos = last.is_valid() ? last.get_position() : size();
-      size_t n = last_pos - first.get_position();
+      size_t first_pos = first - alc.ptr;
+      size_t last_pos = last < end() ? last - alc.ptr : size();
+      size_t n = last_pos - first_pos;
+      if( n == 0 ) { return; }
       alc.num_elements_used -= n;
 
-      for( size_t i = first.get_position(), e = last_pos; i < alc.num_elements_used && e < alc.num_elements_used + n; ++i, ++e )
+      for( size_t i = first_pos, e = last_pos; i < alc.num_elements_used && e < alc.num_elements_used + n; ++i, ++e )
       {
         alc.ptr[i] = alc.ptr[e];
       }
@@ -864,17 +796,19 @@ public:
   // adds t before position it and automatically resizes vector if necessary
   void insert( const iterator it, const Type *t )
   {
-    if ( !it.is_valid() || alc.num_elements_used == 0 )
+    if ( it >= end() || alc.num_elements_used == 0 )
     {
       push_back( t );
     }
     else
     {
+      // Take the position before growing the storage, which invalidates the iterator.
+      const size_t it_position = it - alc.ptr;
+
       if ( alc.num_elements_used == capacity() )
         vector_ReAllocate( vector_GetNextCapacity() );
 
       // move the remaining elements
-      const size_t it_position = it.get_position();
       for ( size_t i = alc.num_elements_used; i > it_position; --i )
       {
         alc.ptr[i] = alc.ptr[i - 1];
