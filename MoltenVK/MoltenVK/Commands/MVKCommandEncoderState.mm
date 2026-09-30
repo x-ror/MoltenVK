@@ -38,12 +38,13 @@ using namespace std;
 
 #pragma mark - Resource Binder Structs
 
-static MTLRenderStages getMTLStages(MVKResourceUsageStages stages) {
+static constexpr MTLRenderStages getMTLStages(MVKResourceUsageStages stages) {
+	using enum MVKResourceUsageStages;
 	switch (stages) {
-		case MVKResourceUsageStages::Vertex:   return MTLRenderStageVertex;
-		case MVKResourceUsageStages::Fragment: return MTLRenderStageFragment;
-		case MVKResourceUsageStages::All:      return MTLRenderStageVertex | MTLRenderStageFragment;
-		case MVKResourceUsageStages::Count:    break;
+		case Vertex:   return MTLRenderStageVertex;
+		case Fragment: return MTLRenderStageFragment;
+		case All:      return MTLRenderStageVertex | MTLRenderStageFragment;
+		case Count:    break;
 	}
 	assert(0);
 	return 0;
@@ -172,14 +173,16 @@ static ResourceBinderTable<MVKVertexBufferBinder> GenVertexBufferBinders() {
 	return res;
 }
 
+// Namespace-scope tables are initialized at load time, so lookups on the draw path pay no initialization guard.
+static const ResourceBinderTable<MVKResourceBinder> sResourceBinderTable = GenResourceBinders();
+static const ResourceBinderTable<MVKVertexBufferBinder> sVertexBufferBinderTable = GenVertexBufferBinders();
+
 const MVKResourceBinder& MVKResourceBinder::Get(Stage stage) {
-	static const ResourceBinderTable<MVKResourceBinder> table = GenResourceBinders();
-	return table[stage];
+	return sResourceBinderTable[stage];
 }
 
 const MVKVertexBufferBinder& MVKVertexBufferBinder::Get(Stage stage) {
-	static const ResourceBinderTable<MVKVertexBufferBinder> table = GenVertexBufferBinders();
-	return table[stage];
+	return sVertexBufferBinderTable[stage];
 }
 
 #pragma mark - Resource Binding Functions
@@ -257,7 +260,7 @@ static void bindSampler(Encoder encoder, id<MTLSamplerState> sampler, NSUInteger
 	}
 }
 
-static uint32_t getCPUMetaOffset(MVKDescriptorCPULayout layout) {
+static constexpr uint32_t getCPUMetaOffset(MVKDescriptorCPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorCPULayout::OneIDMeta:  return offsetof(MVKCPUDescriptorOneIDMeta,  meta);
 		case MVKDescriptorCPULayout::OneID2Meta: return offsetof(MVKCPUDescriptorOneID2Meta, meta);
@@ -275,7 +278,7 @@ enum class ImplicitBufferData {
 	TextureSwizzle,
 };
 
-static bool isTexelBuffer(VkDescriptorType type) {
+static constexpr bool isTexelBuffer(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
 		case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
@@ -284,7 +287,7 @@ static bool isTexelBuffer(VkDescriptorType type) {
 			return false;
 	}
 }
-static bool isImage(VkDescriptorType type) {
+static constexpr bool isImage(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
 		case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
@@ -350,10 +353,12 @@ static void bindImplicitBufferData(uint32_t* target, MVKDescriptorSetLayout* lay
 static void bindDescriptorSets(MVKImplicitBufferData& target,
                                MVKShaderStage stage,
                                MVKPipelineLayout* layout,
-                               uint32_t firstSet, uint32_t setCount, MVKDescriptorSet*const* sets,
-                               uint32_t dynamicOffsetCount, const uint32_t* dynamicOffsets) {
-	[[maybe_unused]] const uint32_t* dynamicOffsetsEnd = dynamicOffsets + dynamicOffsetCount;
+                               uint32_t firstSet, MVKArrayRef<MVKDescriptorSet*const> sets,
+                               MVKArrayRef<const uint32_t> dynamicOffsetValues) {
+	const uint32_t* dynamicOffsets = dynamicOffsetValues.data();		// Advanced as each set's offsets are consumed.
+	[[maybe_unused]] const uint32_t* dynamicOffsetsEnd = dynamicOffsetValues.end();
 	VkShaderStageFlags vkStage = mvkVkShaderStageFlagBitsFromMVKShaderStage(stage);
+	uint32_t setCount = (uint32_t)sets.size();
 	for (uint32_t i = 0; i < setCount; i++) {
 		MVKDescriptorSet* set = sets[i];
 		if (!set)
@@ -417,18 +422,12 @@ static void bindImmediateData(id<MTLCommandEncoder> encoder,
 	bindImmediateData(encoder, mvkEncoder, reinterpret_cast<const uint8_t*>(data.data()), data.byteSize(), idx, binder);
 }
 
-/** Updates a value at the given index in the given vector, resizing if needed. */
-template<class V>
-static void updateImplicitBuffer(V &contents, uint32_t index, uint32_t value) {
-	if (index >= contents.size()) { contents.resize(index + 1); }
-	contents[index] = value;
-}
-
 static constexpr bool isUseResource(MVKDescriptorBindOperationCode op) {
+	using enum MVKDescriptorBindOperationCode;
 	switch (op) {
-		case MVKDescriptorBindOperationCode::UseBufferWithLiveCheck:
-		case MVKDescriptorBindOperationCode::UseTextureWithLiveCheck:
-		case MVKDescriptorBindOperationCode::UseResource:
+		case UseBufferWithLiveCheck:
+		case UseTextureWithLiveCheck:
+		case UseResource:
 			return true;
 		default:
 			return false;
@@ -444,7 +443,8 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
                           MVKStageResourceBits& exists,
                           MVKStageResourceBindings& bindings,
                           const MVKResourceBinder& RESTRICT binder) {
-	if (Op == MVKDescriptorBindOperationCode::BindBytes) {
+	using enum MVKDescriptorBindOperationCode;
+	if constexpr (Op == BindBytes) {
 		MVKStageResourceBindings::Buffer buffer = { reinterpret_cast<id<MTLBuffer>>(src), 0 };
 		if (!exists.buffers.get(target) || bindings.buffers[target].buffer != buffer.buffer) {
 			exists.buffers.set(target);
@@ -457,19 +457,19 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
 	for (uint32_t i = 0; i < count; i++, src += stride) {
 		id resource = *reinterpret_cast<const id*>(src);
 		switch (Op) {
-			case MVKDescriptorBindOperationCode::BindBytes:
+			case BindBytes:
 				assert(0); // Handled above
 				break;
-			case MVKDescriptorBindOperationCode::BindBuffer:
-			case MVKDescriptorBindOperationCode::BindBufferDynamic:
-			case MVKDescriptorBindOperationCode::BindBufferWithLiveCheck:
-			case MVKDescriptorBindOperationCode::BindBufferDynamicWithLiveCheck: {
+			case BindBuffer:
+			case BindBufferDynamic:
+			case BindBufferWithLiveCheck:
+			case BindBufferDynamicWithLiveCheck: {
 				static_assert(offsetof(MVKCPUDescriptorOneID2Meta, offset) == offsetof(MVKCPUDescriptorOneID2Meta, a) + sizeof(id), "For the pointer arithmetic below");
 				static_assert(offsetof(MVKCPUDescriptorTwoID2Meta, offset) == offsetof(MVKCPUDescriptorTwoID2Meta, b) + sizeof(id), "For the pointer arithmetic below");
 				uint64_t offset = *reinterpret_cast<const uint64_t*>(src + sizeof(id));
-				if (Op == MVKDescriptorBindOperationCode::BindBufferDynamic || Op == MVKDescriptorBindOperationCode::BindBufferDynamicWithLiveCheck)
+				if (Op == BindBufferDynamic || Op == BindBufferDynamicWithLiveCheck)
 					offset += dynOffsets[i];
-				if ((Op == MVKDescriptorBindOperationCode::BindBufferWithLiveCheck || Op == MVKDescriptorBindOperationCode::BindBufferDynamicWithLiveCheck) && resource) {
+				if ((Op == BindBufferWithLiveCheck || Op == BindBufferDynamicWithLiveCheck) && resource) {
 					id<MTLBuffer> buffer = resource;
 					if (exists.buffers.get(target + i) && bindings.buffers[target + i].buffer == buffer) {
 						if (offset != bindings.buffers[target + i].offset) {
@@ -487,11 +487,11 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
 				break;
 			}
 
-			case MVKDescriptorBindOperationCode::BindTexture:
+			case BindTexture:
 				bindTexture(encoder, static_cast<id<MTLTexture>>(resource), target + i, exists, bindings, binder);
 				break;
 
-			case MVKDescriptorBindOperationCode::BindTextureWithLiveCheck:
+			case BindTextureWithLiveCheck:
 				if (id<MTLTexture> tex = resource) {
 					if (exists.textures.get(target + i) && bindings.textures[target + i] == resource) {
 						// Already bound
@@ -505,11 +505,11 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
 				}
 				break;
 
-			case MVKDescriptorBindOperationCode::BindSampler:
+			case BindSampler:
 				bindSampler(encoder, static_cast<id<MTLSamplerState>>(resource), target + i, exists, bindings, binder);
 				break;
 
-			case MVKDescriptorBindOperationCode::BindSamplerWithLiveCheck:
+			case BindSamplerWithLiveCheck:
 				if (id<MTLSamplerState> samp = resource) {
 					if (exists.samplers.get(target + i) && bindings.samplers[target + i] == resource) {
 						// Already bound
@@ -523,15 +523,15 @@ static void executeBindOp(id<MTLCommandEncoder> encoder,
 				}
 				break;
 
-			case MVKDescriptorBindOperationCode::UseResource:
+			case UseResource:
 				if (resource)
 					mvkEncoder.getState().mtlShared()._useResource.add(resource, useResourceStage, target);
 				break;
 
-			case MVKDescriptorBindOperationCode::UseBufferWithLiveCheck:
-			case MVKDescriptorBindOperationCode::UseTextureWithLiveCheck:
+			case UseBufferWithLiveCheck:
+			case UseTextureWithLiveCheck:
 				if (resource) {
-					MVKLiveList& list = Op == MVKDescriptorBindOperationCode::UseBufferWithLiveCheck ? dev->getLiveResources().buffers : dev->getLiveResources().textures;
+					MVKLiveList& list = Op == UseBufferWithLiveCheck ? dev->getLiveResources().buffers : dev->getLiveResources().textures;
 					if (auto live = list.isLive(resource))
 						mvkEncoder.getState().mtlShared()._useResource.addImmediate(resource, encoder, binder.useResource, useResourceStage, target);
 				}
@@ -549,11 +549,19 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
                            MVKStageResourceBits& exists,
                            MVKStageResourceBindings& bindings,
                            const MVKResourceBinder& RESTRICT binder) {
+	using enum MVKDescriptorBindOperationCode;
 	bool didUseResource = false;
+	// Ops are grouped by descriptor set, so only look the set and its layout up when the set changes.
+	uint32_t lastSetIdx = UINT32_MAX;
+	MVKDescriptorSet* set = nullptr;
+	MVKDescriptorSetLayout* setLayout = nullptr;
 	for (const MVKDescriptorBindOperation& op : ops) {
-		MVKDescriptorSet* set = common._descriptorSets[op.set];
+		if (op.set != lastSetIdx) {
+			lastSetIdx = op.set;
+			set = common._descriptorSets[op.set];
+			setLayout = common._layout->getDescriptorSetLayout(op.set);
+		}
 		uint32_t target = op.target;
-		MVKDescriptorSetLayout* setLayout = common._layout->getDescriptorSetLayout(op.set);
 		const MVKDescriptorBinding& binding = setLayout->bindings()[op.bindingIdx];
 		const char* src = set->cpuBuffer + binding.cpuOffset + op.offset();
 		const uint32_t* dynOffs = implicitBufferData.dynamicOffsets.data() + op.target2;
@@ -570,9 +578,8 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
 		}
 
 		switch (op.opcode) {
-#define CASE(x) case MVKDescriptorBindOperationCode::x: \
-				executeBindOp<MVKDescriptorBindOperationCode::x>( \
-					encoder, mvkEncoder, src, count, stride, target, dynOffs, useResourceStage, exists, bindings, binder); \
+#define CASE(x) case x: \
+				executeBindOp<x>(encoder, mvkEncoder, src, count, stride, target, dynOffs, useResourceStage, exists, bindings, binder); \
 				break;
 			CASE(BindBytes)
 			CASE(BindBuffer)
@@ -587,7 +594,7 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
 			CASE(UseBufferWithLiveCheck)
 			CASE(UseTextureWithLiveCheck)
 #undef CASE
-			case MVKDescriptorBindOperationCode::BindImmutableSampler: {
+			case BindImmutableSampler: {
 				MVKSampler*const* samplers = &setLayout->immutableSamplers()[binding.immSamplerIndex];
 				for (uint32_t i = 0; i < count; i++)
 					bindSampler(encoder, samplers[i]->getMTLSamplerState(), target + i, exists, bindings, binder);
@@ -609,13 +616,13 @@ static MVKArrayRef<const T> getImplicitBindingData(const MVKSmallVector<T, N>& d
 	return MVKArrayRef(data.data(), std::min(data.size(), limit));
 }
 
-static MVKResourceUsageStages getUseResourceStage(MVKMetalGraphicsStage stage) {
+static constexpr MVKResourceUsageStages getUseResourceStage(MVKMetalGraphicsStage stage) {
 	// The single-stage enums are the same
 	return static_cast<MVKResourceUsageStages>(stage);
 }
 
 /** Check if `add` is a subset of `current` */
-static bool isCompatible(MVKResourceUsageStages current, MVKResourceUsageStages add) {
+static constexpr bool isCompatible(MVKResourceUsageStages current, MVKResourceUsageStages add) {
 	if (current == add)
 		return true;
 	if (current == MVKResourceUsageStages::All)
@@ -623,7 +630,7 @@ static bool isCompatible(MVKResourceUsageStages current, MVKResourceUsageStages 
 	return false;
 }
 
-static MVKResourceUsageStages combineStages(MVKResourceUsageStages a, MVKResourceUsageStages b) {
+static constexpr MVKResourceUsageStages combineStages(MVKResourceUsageStages a, MVKResourceUsageStages b) {
 	if (a == b)
 		return a;
 	return MVKResourceUsageStages::All;
@@ -688,7 +695,7 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
 	if (isBound && mvkEncoder.getMVKConfig().debugMode) {
 		isBound = verifyBoundResources(mvkEncoder, common, resources, implicitBufferData, useResourceStage, exists, bindings, binder);
 	}
-	if ( !isBound ) {
+	if ( !isBound ) [[unlikely]] {
 		executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
 		boundResources = &resources;
 	}
@@ -913,7 +920,7 @@ static bool isCompatible(MVKUseResourceHelper::ResourceInfo current, MVKUseResou
 }
 
 void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write) {
-	ResourceInfo info { stage, write, true };
+	ResourceInfo info { .stages = stage, .write = write, .deferred = true };
 	auto res = used.emplace(resource, info);
 	if (res.inserted || !isCompatible(res.value, info)) {
 		ResourceInfo& stored = res.value;
@@ -927,7 +934,7 @@ void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages 
 }
 
 void MVKUseResourceHelper::addImmediate(id<MTLResource> resource, id<MTLCommandEncoder> enc, MVKResourceBinder::UseResource func, MVKResourceUsageStages stage, bool write) {
-	ResourceInfo info { stage, write, false };
+	ResourceInfo info { .stages = stage, .write = write, .deferred = false };
 	auto res = used.emplace(resource, info);
 	if (res.inserted || !isCompatible(res.value, info)) {
 		ResourceInfo& stored = res.value;
@@ -1001,21 +1008,6 @@ void MVKVulkanCommonEncoderState::setLayout(MVKPipelineLayout* layout) {
 	}
 }
 
-MVKVulkanCommonEncoderState::MVKVulkanCommonEncoderState(const MVKVulkanCommonEncoderState& other) {
-	memcpy(_descriptorSets, other._descriptorSets, sizeof(_descriptorSets));
-	_pushDescriptor = other._pushDescriptor;
-	setLayout(other._layout);
-	memcpy(_pushDescriptor.cpuBuffer, other._pushDescriptor.cpuBuffer, _pushDescriptor.cpuBufferSize);
-}
-
-MVKVulkanCommonEncoderState& MVKVulkanCommonEncoderState::operator=(const MVKVulkanCommonEncoderState& other) {
-	memmove(_descriptorSets, other._descriptorSets, sizeof(_descriptorSets));
-	_pushDescriptor = other._pushDescriptor;
-	setLayout(other._layout);
-	memmove(_pushDescriptor.cpuBuffer, other._pushDescriptor.cpuBuffer, _pushDescriptor.cpuBufferSize);
-	return *this;
-}
-
 #pragma mark - MVKVulkanGraphicsCommandEncoderState
 
 MVKArrayRef<const MTLSamplePosition> MVKVulkanGraphicsCommandEncoderState::getSamplePositions() const {
@@ -1054,16 +1046,14 @@ bool MVKVulkanGraphicsCommandEncoderState::isBresenhamLines() const {
 void MVKVulkanGraphicsCommandEncoderState::bindDescriptorSets(
 	MVKPipelineLayout* layout,
 	uint32_t firstSet,
-	uint32_t setCount,
-	MVKDescriptorSet*const* sets,
-	uint32_t dynamicOffsetCount,
-	const uint32_t* dynamicOffsets)
+	MVKArrayRef<MVKDescriptorSet*const> sets,
+	MVKArrayRef<const uint32_t> dynamicOffsets)
 {
 	for (uint32_t i = 0; i <= kMVKShaderStageFragment; i++) {
 		MVKShaderStage stage = static_cast<MVKShaderStage>(i);
-		::bindDescriptorSets(_implicitBufferData[stage], stage, layout, firstSet, setCount, sets, dynamicOffsetCount, dynamicOffsets);
+		::bindDescriptorSets(_implicitBufferData[stage], stage, layout, firstSet, sets, dynamicOffsets);
 	}
-	for (uint32_t i = 0; i < setCount; i++) {
+	for (uint32_t i = 0; i < sets.size(); i++) {
 		_descriptorSets[firstSet + i] = sets[i];
 	}
 }
@@ -1073,13 +1063,11 @@ void MVKVulkanGraphicsCommandEncoderState::bindDescriptorSets(
 void MVKVulkanComputeCommandEncoderState::bindDescriptorSets(
 	MVKPipelineLayout* layout,
 	uint32_t firstSet,
-	uint32_t setCount,
-	MVKDescriptorSet*const* sets,
-	uint32_t dynamicOffsetCount,
-	const uint32_t* dynamicOffsets)
+	MVKArrayRef<MVKDescriptorSet*const> sets,
+	MVKArrayRef<const uint32_t> dynamicOffsets)
 {
-	::bindDescriptorSets(_implicitBufferData, kMVKShaderStageCompute, layout, firstSet, setCount, sets, dynamicOffsetCount, dynamicOffsets);
-	for (uint32_t i = 0; i < setCount; i++) {
+	::bindDescriptorSets(_implicitBufferData, kMVKShaderStageCompute, layout, firstSet, sets, dynamicOffsets);
+	for (uint32_t i = 0; i < sets.size(); i++) {
 		_descriptorSets[firstSet + i] = sets[i];
 	}
 }
@@ -1180,8 +1168,9 @@ void MVKMetalGraphicsCommandEncoderState::bindStateData(
   MVKRenderStateFlags flags,
   const VkViewport* viewports,
   const VkRect2D* scissors) {
+	using enum MVKRenderStateFlag;
 	if (flags.hasAny(FlagsViewportScissor)) {
-		if (flags.has(MVKRenderStateFlag::Viewports) &&
+		if (flags.has(Viewports) &&
 		  (_numViewports != data.numViewports || !mvkAreEqual(_viewports, viewports, data.numViewports))) {
 			_numViewports = data.numViewports;
 			mvkCopy(_viewports, viewports, data.numViewports);
@@ -1213,7 +1202,7 @@ void MVKMetalGraphicsCommandEncoderState::bindStateData(
 				[encoder setViewports:mtlViewports count:numViewports];
 			}
 		}
-		if (flags.has(MVKRenderStateFlag::Scissors) &&
+		if (flags.has(Scissors) &&
 		  (_numScissors != data.numScissors || !mvkAreEqual(_scissors, scissors, data.numScissors))) {
 			if (!_flags.has(MVKMetalRenderEncoderStateFlag::RasterizationDisabledByScissor) || _numScissors != data.numScissors)
 				_flags.add(MVKMetalRenderEncoderStateFlag::ScissorDirty);
@@ -1223,23 +1212,23 @@ void MVKMetalGraphicsCommandEncoderState::bindStateData(
 	}
 
 	if (flags.hasAny(FlagsMetalState)) {
-		if (flags.has(MVKRenderStateFlag::BlendConstants) && !mvkAreEqual(&_blendConstants, &data.blendConstants)) {
+		if (flags.has(BlendConstants) && !mvkAreEqual(&_blendConstants, &data.blendConstants)) {
 			_blendConstants = data.blendConstants;
 			const float* c = data.blendConstants.float32;
 			[encoder setBlendColorRed:c[0] green:c[1] blue:c[2] alpha:c[3]];
 		}
-		if (flags.has(MVKRenderStateFlag::DepthClipEnable)) {
+		if (flags.has(DepthClipEnable)) {
 			bool enable = data.enable.has(MVKRenderStateEnableFlag::DepthClamp);
 			if (_flags.has(MVKMetalRenderEncoderStateFlag::DepthClampEnable) != enable) {
 				_flags.flip(MVKMetalRenderEncoderStateFlag::DepthClampEnable);
 				[encoder setDepthClipMode:enable ? MTLDepthClipModeClamp : MTLDepthClipModeClip];
 			}
 		}
-		if (flags.has(MVKRenderStateFlag::FrontFace) && _frontFace != data.frontFace) {
+		if (flags.has(FrontFace) && _frontFace != data.frontFace) {
 			_frontFace = data.frontFace;
 			[encoder setFrontFacingWinding:static_cast<MTLWinding>(data.frontFace)];
 		}
-		if (flags.has(MVKRenderStateFlag::StencilReference) && !mvkAreEqual(&_stencilReference, &data.stencilReference)) {
+		if (flags.has(StencilReference) && !mvkAreEqual(&_stencilReference, &data.stencilReference)) {
 			_stencilReference = data.stencilReference;
 			if (_stencilReference.frontFaceValue == _stencilReference.backFaceValue)
 				[encoder setStencilReferenceValue:_stencilReference.frontFaceValue];
@@ -1249,13 +1238,13 @@ void MVKMetalGraphicsCommandEncoderState::bindStateData(
 #if MVK_USE_METAL_PRIVATE_API
 		if (mvkEncoder.getMVKConfig().useMetalPrivateAPI) {
 			auto mvkRendEnc = static_cast<id<MVKMTLRenderCommandEncoder>>(encoder);
-			if (flags.has(MVKRenderStateFlag::LineWidth) && _lineWidth != data.lineWidth) {
+			if (flags.has(LineWidth) && _lineWidth != data.lineWidth) {
 				_lineWidth = data.lineWidth;
 				if ([mvkRendEnc respondsToSelector:@selector(setLineWidth:)]) {
 					[mvkRendEnc setLineWidth:_lineWidth];
 				}
 			}
-			if (flags.has(MVKRenderStateFlag::ProvokingVertexMode) && _provokingVertexMode != data.provokingVertexMode) {
+			if (flags.has(ProvokingVertexMode) && _provokingVertexMode != data.provokingVertexMode) {
 				_provokingVertexMode = data.provokingVertexMode;
 				if ([mvkRendEnc respondsToSelector:@selector(setProvokingVertexMode:)]) {
 					[mvkRendEnc setProvokingVertexMode:_provokingVertexMode];
@@ -1271,23 +1260,24 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 	MVKCommandEncoder& mvkEncoder,
 	const MVKVulkanGraphicsCommandEncoderState& vk)
 {
+	using enum MVKRenderStateFlag;
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
 	MVKRenderStateFlags staticStateFlags = pipeline->getStaticStateFlags();
 	MVKRenderStateFlags dynamicStateFlags = pipeline->getDynamicStateFlags();
 	MVKRenderStateFlags anyStateNeeded = (staticStateFlags | dynamicStateFlags).removingAll(_stateReady);
 	const MVKRenderStateData& staticStateData = pipeline->getStaticStateData();
 	const MVKRenderStateData& dynamicStateData = vk._renderState;
-#define PICK_STATE(x) (dynamicStateFlags.has(MVKRenderStateFlag::x) ? &dynamicStateData : &staticStateData)
+#define PICK_STATE(x) (dynamicStateFlags.has(x) ? &dynamicStateData : &staticStateData)
 	// Handle anything that requires data from multiple (possibly different) sources out here
 
 	// Polygon mode and primitive topology need to be handled specially, as we implement point mode by switching the primitive topology
 	// Cull mode and discard both are specially handled only when using dynamic state
 	// Whether cull mode discards is affected by whether we're rendering triangles, so do all of them at once
 	static constexpr MVKRenderStateFlags FlagsWithSpecialHandling = {
-		MVKRenderStateFlag::CullMode,
-		MVKRenderStateFlag::PolygonMode,
-		MVKRenderStateFlag::PrimitiveTopology,
-		MVKRenderStateFlag::RasterizerDiscardEnable,
+		CullMode,
+		PolygonMode,
+		PrimitiveTopology,
+		RasterizerDiscardEnable,
 	};
 	if (anyStateNeeded.hasAny(FlagsWithSpecialHandling)) {
 		// Special handling, static can override dynamic due to Metal not supporting full dynamic topology
@@ -1320,8 +1310,8 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 		}
 
 		MVKRenderStateEnableFlags dynEnable = dynamicStateData.enable;
-		bool dynRasterizationDisable = isTriangle && dynamicStateFlags.has(MVKRenderStateFlag::CullMode) && dynEnable.has(MVKRenderStateEnableFlag::CullBothFaces);
-		dynRasterizationDisable |= dynamicStateFlags.has(MVKRenderStateFlag::RasterizerDiscardEnable) && dynEnable.has(MVKRenderStateEnableFlag::RasterizerDiscard);
+		bool dynRasterizationDisable = isTriangle && dynamicStateFlags.has(CullMode) && dynEnable.has(MVKRenderStateEnableFlag::CullBothFaces);
+		dynRasterizationDisable |= dynamicStateFlags.has(RasterizerDiscardEnable) && dynEnable.has(MVKRenderStateEnableFlag::RasterizerDiscard);
 		bool staticRasterizationDisable = pipeline->isRasterizationDisabled();
 
 		if (dynRasterizationDisable != _flags.has(MVKMetalRenderEncoderStateFlag::RasterizationDisabledByScissor) && !staticRasterizationDisable) {
@@ -1332,13 +1322,13 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 
 	// Depth stencil has many sources that all go together into one Metal DepthStencilState
 	static constexpr MVKRenderStateFlags FlagsDepthStencil {
-		MVKRenderStateFlag::DepthCompareOp,
-		MVKRenderStateFlag::DepthTestEnable,
-		MVKRenderStateFlag::DepthWriteEnable,
-		MVKRenderStateFlag::StencilCompareMask,
-		MVKRenderStateFlag::StencilOp,
-		MVKRenderStateFlag::StencilTestEnable,
-		MVKRenderStateFlag::StencilWriteMask,
+		DepthCompareOp,
+		DepthTestEnable,
+		DepthWriteEnable,
+		StencilCompareMask,
+		StencilOp,
+		StencilTestEnable,
+		StencilWriteMask,
 	};
 	if (anyStateNeeded.hasAny(FlagsDepthStencil)) {
 		_stateReady.addAll(FlagsDepthStencil);
@@ -1368,19 +1358,19 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 
 	// Flags with a separate enable flag can come from two places at once
 	static constexpr MVKRenderStateFlags FlagsWithEnable {
-		MVKRenderStateFlag::DepthBias,
-		MVKRenderStateFlag::DepthBiasEnable,
+		DepthBias,
+		DepthBiasEnable,
 #if MVK_XCODE_26
-		MVKRenderStateFlag::DepthBounds,
-		MVKRenderStateFlag::DepthBoundsTestEnable,
+		DepthBounds,
+		DepthBoundsTestEnable,
 #endif
 #if MVK_USE_METAL_PRIVATE_API
-		MVKRenderStateFlag::PrimitiveRestartEnable,
+		PrimitiveRestartEnable,
 #endif
 	};
 	if (anyStateNeeded.hasAny(FlagsWithEnable)) {
 		_stateReady.addAll(anyStateNeeded & FlagsWithEnable);
-		if (anyStateNeeded.hasAny({ MVKRenderStateFlag::DepthBias, MVKRenderStateFlag::DepthBiasEnable })) {
+		if (anyStateNeeded.hasAny({ DepthBias, DepthBiasEnable })) {
 			bool wasEnabled = _flags.has(MVKMetalRenderEncoderStateFlag::DepthBiasEnable);
 			if (PICK_STATE(DepthBiasEnable)->enable.has(MVKRenderStateEnableFlag::DepthBias)) {
 				const MVKDepthBias& src = PICK_STATE(DepthBias)->depthBias;
@@ -1397,7 +1387,7 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 			}
 		}
 #if MVK_XCODE_26
-		if (anyStateNeeded.hasAny({ MVKRenderStateFlag::DepthBounds, MVKRenderStateFlag::DepthBoundsTestEnable }) &&
+		if (anyStateNeeded.hasAny({ DepthBounds, DepthBoundsTestEnable }) &&
 		    mvkEncoder.getMetalFeatures().depthBoundsTest)
 		{
 			bool wasEnabled = _flags.has(MVKMetalRenderEncoderStateFlag::DepthBoundsEnable);
@@ -1415,7 +1405,7 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 		}
 #endif
 #if MVK_USE_METAL_PRIVATE_API
-		if (anyStateNeeded.has(MVKRenderStateFlag::PrimitiveRestartEnable) &&
+		if (anyStateNeeded.has(PrimitiveRestartEnable) &&
 		    mvkEncoder.getMVKConfig().useMetalPrivateAPI &&
 		    [mvkEncoder._mtlRenderEncoder respondsToSelector:@selector(setPrimitiveRestartEnabled:index:)])
 		{
@@ -1472,7 +1462,7 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
   const MVKVulkanGraphicsCommandEncoderState& vk,
   const MVKVulkanSharedCommandEncoderState& vkShared) {
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
-	if (!pipeline->getMainPipelineState()) // Abort if pipeline could not be created.
+	if (!pipeline->getMainPipelineState()) [[unlikely]] // Abort if pipeline could not be created.
 		return;
 
 	// Pipeline
@@ -1509,25 +1499,26 @@ void MVKMetalGraphicsCommandEncoderState::prepareHelperDraw(
   id<MTLRenderCommandEncoder> encoder,
   MVKCommandEncoder& mvkEncoder,
   const MVKHelperDrawState& state) {
+	using enum MVKRenderStateFlag;
 	_stateReady.removeAll({
-		MVKRenderStateFlag::CullMode,
-		MVKRenderStateFlag::DepthBiasEnable,
-		MVKRenderStateFlag::DepthBoundsTestEnable,
-		MVKRenderStateFlag::DepthCompareOp,
-		MVKRenderStateFlag::DepthTestEnable,
-		MVKRenderStateFlag::DepthWriteEnable,
-		MVKRenderStateFlag::LineWidth,
-		MVKRenderStateFlag::PolygonMode,
-		MVKRenderStateFlag::PrimitiveRestartEnable,
-		MVKRenderStateFlag::ProvokingVertexMode,
-		MVKRenderStateFlag::RasterizerDiscardEnable,
-		MVKRenderStateFlag::Scissors,
-		MVKRenderStateFlag::StencilCompareMask,
-		MVKRenderStateFlag::StencilOp,
-		MVKRenderStateFlag::StencilReference,
-		MVKRenderStateFlag::StencilTestEnable,
-		MVKRenderStateFlag::StencilWriteMask,
-		MVKRenderStateFlag::Viewports,
+		CullMode,
+		DepthBiasEnable,
+		DepthBoundsTestEnable,
+		DepthCompareOp,
+		DepthTestEnable,
+		DepthWriteEnable,
+		LineWidth,
+		PolygonMode,
+		PrimitiveRestartEnable,
+		ProvokingVertexMode,
+		RasterizerDiscardEnable,
+		Scissors,
+		StencilCompareMask,
+		StencilOp,
+		StencilReference,
+		StencilTestEnable,
+		StencilWriteMask,
+		Viewports,
 	});
 	_flags.removeAll({
 		MVKMetalRenderEncoderStateFlag::PipelineReady,
@@ -1636,7 +1627,7 @@ void MVKMetalComputeCommandEncoderState::prepareComputeDispatch(
   const MVKVulkanSharedCommandEncoderState& vkShared) {
 	MVKComputePipeline* pipeline = vk._pipeline;
 	id<MTLComputePipelineState> mtlPipeline = pipeline->getPipelineState();
-	if (!mtlPipeline) // Abort if pipeline could not be created.
+	if (!mtlPipeline) [[unlikely]] // Abort if pipeline could not be created.
 		return;
 
 	_vkPipeline = pipeline;
@@ -1667,7 +1658,7 @@ void MVKMetalComputeCommandEncoderState::prepareRenderDispatch(
 	MVKShaderStage stage)
 {
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
-	if (!pipeline->getMainPipelineState()) // Abort if pipeline could not be created.
+	if (!pipeline->getMainPipelineState()) [[unlikely]] // Abort if pipeline could not be created.
 		return;
 
 
@@ -1816,11 +1807,9 @@ void MVKCommandEncoderState::bindDescriptorSets(
   VkPipelineBindPoint bindPoint,
   MVKPipelineLayout* layout,
   uint32_t firstSet,
-  uint32_t setCount,
-  MVKDescriptorSet*const* sets,
-  uint32_t dynamicOffsetCount,
-  const uint32_t* dynamicOffsets) {
-	auto affected = MVKStaticBitSet<kMVKMaxDescriptorSetCount>::range(firstSet, firstSet + setCount);
+  MVKArrayRef<MVKDescriptorSet*const> sets,
+  MVKArrayRef<const uint32_t> dynamicOffsets) {
+	auto affected = MVKStaticBitSet<kMVKMaxDescriptorSetCount>::range(firstSet, firstSet + (uint32_t)sets.size());
 	applyToActiveMTLState(bindPoint, [affected](auto& mtl){
 		invalidateDescriptorSetImplicitBuffers(mtl);
 		mtl.invalidateBoundResources();
@@ -1829,9 +1818,9 @@ void MVKCommandEncoderState::bindDescriptorSets(
 		}
 	});
 	if (bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) {
-		_vkGraphics.bindDescriptorSets(layout, firstSet, setCount, sets, dynamicOffsetCount, dynamicOffsets);
+		_vkGraphics.bindDescriptorSets(layout, firstSet, sets, dynamicOffsets);
 	} else if (bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE) {
-		_vkCompute.bindDescriptorSets(layout, firstSet, setCount, sets, dynamicOffsetCount, dynamicOffsets);
+		_vkCompute.bindDescriptorSets(layout, firstSet, sets, dynamicOffsets);
 	}
 }
 
@@ -1843,12 +1832,12 @@ MVKVulkanCommonEncoderState* MVKCommandEncoderState::getVkEncoderState(VkPipelin
 	}
 }
 
-void MVKCommandEncoderState::pushDescriptorSet(VkPipelineBindPoint bindPoint, MVKPipelineLayout* layout, uint32_t set, uint32_t writeCount, const VkWriteDescriptorSet* writes) {
+void MVKCommandEncoderState::pushDescriptorSet(VkPipelineBindPoint bindPoint, MVKPipelineLayout* layout, uint32_t set, MVKArrayRef<const VkWriteDescriptorSet> writes) {
 	assert(layout->pushDescriptor() == set);
 	if (MVKVulkanCommonEncoderState* state = getVkEncoderState(bindPoint)) [[likely]] {
 		MVKDescriptorSetLayout* dsl = layout->getDescriptorSetLayout(set);
 		state->ensurePushDescriptorSize(dsl->cpuSize());
-		mvkPushDescriptorSet(state->_pushDescriptor.cpuBuffer, dsl, writeCount, writes);
+		mvkPushDescriptorSet(state->_pushDescriptor.cpuBuffer, dsl, (uint32_t)writes.size(), writes.data());
 		applyToActiveMTLState(bindPoint, [](auto& mtl){ mtl.invalidateBoundResources(); });
 	}
 }
@@ -1907,7 +1896,7 @@ void MVKCommandEncoderState::beginComputeEncoding() {
 	_mtlActiveEncoder = CommandEncoderClass::Compute;
 }
 
-template <typename Fn>
+template <MVKMTLStateFunction Fn>
 void MVKCommandEncoderState::applyToActiveMTLState(VkPipelineBindPoint bindPoint, Fn&& fn) {
 	switch (_mtlActiveEncoder) {
 		case CommandEncoderClass::Graphics:

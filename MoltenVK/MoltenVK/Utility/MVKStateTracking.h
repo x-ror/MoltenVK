@@ -36,6 +36,7 @@ struct MVKMTLStencilOps {
 		, depthStencilPassOperation(MTLStencilOperationKeep)
 	{
 	}
+	constexpr bool operator==(const MVKMTLStencilOps&) const = default;
 };
 
 /** A structure to hold configuration data for creating an MTLStencilDescriptor instance. */
@@ -44,8 +45,7 @@ struct MVKMTLStencilDescriptorData {
 	uint32_t writeMask;                /**< The bit-mask to apply when writing values to the stencil buffer. */
 	MVKMTLStencilOps op;
 
-	bool operator==(const MVKMTLStencilDescriptorData& rhs) const { return mvkAreEqual(this, &rhs); }
-	bool operator!=(const MVKMTLStencilDescriptorData& rhs) const { return !(*this == rhs); }
+	constexpr bool operator==(const MVKMTLStencilDescriptorData& rhs) const = default;		// Also provides operator!=().
 
 	constexpr MVKMTLStencilDescriptorData(): readMask(~0u) , writeMask(~0u) {}
 

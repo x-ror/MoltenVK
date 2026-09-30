@@ -56,9 +56,9 @@ static uint32_t mvkGetMTLTextureIOSurfaceID(id<MTLTexture> tex) {
 MVKVulkanAPIObject* MVKImagePlane::getVulkanAPIObject() { return _image; }
 
 id<MTLTexture> MVKImagePlane::getMTLTexture() {
-    if ( !_mtlTexture && _image->_vkFormat ) {
+    if ( !_mtlTexture && _image->_vkFormat ) [[unlikely]] {
         // Lock and check again in case another thread has created the texture.
-        lock_guard<mutex> lock(_image->_lock);
+        lock_guard<MVKUnfairLock> lock(_image->_lock);
         if (_mtlTexture) { return _mtlTexture; }
 
         MTLTextureDescriptor* mtlTexDesc = newMTLTextureDescriptor();    // temp retain
@@ -128,18 +128,15 @@ id<MTLTexture> MVKImagePlane::getMTLTexture(MTLPixelFormat mtlPixFmt) {
     // Note: Retrieve the base texture outside of lock to avoid deadlock if it too needs to be lazily created.
     // Delegate to _image in case the method is overriden. (e.g. if it's a swapchain image)
     if (mtlPixFmt == _mtlPixFmt) { return _image->getMTLTexture(_planeIndex); }
-    id<MTLTexture> mtlTex = _mtlTextureViews[mtlPixFmt];
-    if ( !mtlTex ) {
-        // Lock and check again in case another thread has created the view texture.
-        id<MTLTexture> baseTexture = _image->getMTLTexture(_planeIndex);
-        lock_guard<mutex> lock(_image->_lock);
-        mtlTex = _mtlTextureViews[mtlPixFmt];
-        if ( !mtlTex ) {
-            mtlTex = [baseTexture newTextureViewWithPixelFormat: mtlPixFmt];    // retained
-            _image->_device->getLiveResources().add(mtlTex);
-            _mtlTextureViews[mtlPixFmt] = mtlTex;
-        }
+    // Look up the view texture under the lock, which also guards adding a new one.
+    id<MTLTexture> baseTexture = _image->getMTLTexture(_planeIndex);
+    lock_guard<MVKUnfairLock> lock(_image->_lock);
+    for (auto& view : _mtlTextureViews) {
+        if (view.first == mtlPixFmt) { return view.second; }
     }
+    id<MTLTexture> mtlTex = [baseTexture newTextureViewWithPixelFormat: mtlPixFmt];    // retained
+    _image->_device->getLiveResources().add(mtlTex);
+    _mtlTextureViews.emplace_back(mtlPixFmt, mtlTex);
     return mtlTex;
 }
 
@@ -1030,7 +1027,7 @@ id<MTLTexture> MVKImage::getMTLTexture(uint8_t planeIndex, MTLPixelFormat mtlPix
 }
 
 VkResult MVKImage::setMTLTexture(uint8_t planeIndex, id<MTLTexture> mtlTexture) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	if (planeIndex >= _planes.size()) { return reportError(VK_ERROR_INITIALIZATION_FAILED, "Plane index is out of bounds. Attempted to set MTLTexture at plane index %d in VkImage that has %zu planes.", planeIndex, _planes.size()); }
 
@@ -1072,7 +1069,7 @@ void MVKImage::releaseIOSurface() {
 IOSurfaceRef MVKImage::getIOSurface() { return _ioSurface; }
 
 VkResult MVKImage::useIOSurface(IOSurfaceRef ioSurface) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	// Don't recreate existing. But special case of incoming nil if already nil means create a new IOSurface.
 	if (ioSurface && _ioSurface == ioSurface) { return VK_SUCCESS; }
@@ -1522,7 +1519,7 @@ MVKSwapchainImage::MVKSwapchainImage(MVKDevice* device,
 }
 
 void MVKSwapchainImage::detachSwapchain() {
-	lock_guard<mutex> lock(_detachmentLock);
+	lock_guard<MVKUnfairLock> lock(_detachmentLock);
 	_swapchain = nullptr;
 	_device = nullptr;
 }
@@ -1543,7 +1540,7 @@ bool MVKSwapchainImageAvailability::operator< (const MVKSwapchainImageAvailabili
 }
 
 MVKSwapchainImageAvailability MVKPresentableSwapchainImage::getAvailability() {
-	lock_guard<mutex> lock(_availabilityLock);
+	lock_guard<MVKUnfairLock> lock(_availabilityLock);
 
 	return _availability;
 }
@@ -1577,7 +1574,7 @@ VkResult MVKPresentableSwapchainImage::acquireAndSignalWhenAvailable(MVKSemaphor
 	// This is not done earlier so the texture is retained for any post-processing such as screen captures, etc.
 	releaseMetalDrawable();
 
-	lock_guard<mutex> lock(_availabilityLock);
+	lock_guard<MVKUnfairLock> lock(_availabilityLock);
 
 	// Upon acquisition, update acquisition ID immediately, to move it to the back of the chain,
 	// so other images will be preferred if either all images are available or no images are available.
@@ -1696,7 +1693,7 @@ VkResult MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffe
 }
 
 MVKSwapchainSignaler MVKPresentableSwapchainImage::getPresentationSignaler() {
-	lock_guard<mutex> lock(_availabilityLock);
+	lock_guard<MVKUnfairLock> lock(_availabilityLock);
 
 	// Mark this image as available if no semaphores or fences are waiting to be signaled.
 	_availability.isAvailable = _availabilitySignalers.empty();
@@ -1755,7 +1752,7 @@ void MVKPresentableSwapchainImage::endPresentation(const MVKImagePresentInfo& pr
 	{	// Scope to avoid deadlock if release() is run within detachment lock
 		// If I have become detached from the swapchain, it means the swapchain, and possibly the
 		// VkDevice, have been destroyed by the time of this callback, so do not reference them.
-		lock_guard<mutex> lock(_detachmentLock);
+		lock_guard<MVKUnfairLock> lock(_detachmentLock);
 		if (_device) { addPerformanceInterval(getPerformanceStats().queue.presentSwapchains, _presentationStartTime); }
 		if (_swapchain) { _swapchain->endPresentation(presentInfo, _beginPresentTime, actualPresentTime); }
 	}
@@ -1777,7 +1774,7 @@ void MVKPresentableSwapchainImage::releaseMetalDrawable() {
 // Release the drawable before the lock, as it may trigger completion callback.
 void MVKPresentableSwapchainImage::makeAvailable() {
 	releaseMetalDrawable();
-	lock_guard<mutex> lock(_availabilityLock);
+	lock_guard<MVKUnfairLock> lock(_availabilityLock);
 
 	if ( !_availability.isAvailable ) {
 		signalAndUntrack(_preSignaler);
@@ -1883,16 +1880,16 @@ id<MTLTexture> MVKImageViewPlane::getMTLTexture() {
         id<MTLTexture> baseMTLTexture = _imageView->_image->getMTLTexture(_planeIndex);
 
         if (_mtlTexture && !matchesMTLTextureViewBase(baseMTLTexture)) {
-            lock_guard<mutex> lock(_imageView->_lock);
+            lock_guard<MVKUnfairLock> lock(_imageView->_lock);
             if (_mtlTexture && !matchesMTLTextureViewBase(baseMTLTexture)) {
                 releaseMTLTexture();
             }
         }
 
-        if ( !_mtlTexture && _mtlPixFmt ) {
+        if ( !_mtlTexture && _mtlPixFmt ) [[unlikely]] {
 
             // Lock and check again in case another thread created the texture view
-            lock_guard<mutex> lock(_imageView->_lock);
+            lock_guard<MVKUnfairLock> lock(_imageView->_lock);
             if (_mtlTexture) {
               if (!matchesMTLTextureViewBase(baseMTLTexture)) {
                 releaseMTLTexture();

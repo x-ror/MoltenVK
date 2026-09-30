@@ -35,11 +35,11 @@ using namespace std;
 #pragma mark Operating System versions
 
 MVKOSVersion mvkOSVersion() {
-	static MVKOSVersion _mvkOSVersion = 0;
-	if ( !_mvkOSVersion ) {
+	// Thread-safe one-time initialization via a function-local static.
+	static const MVKOSVersion _mvkOSVersion = []() {
 		NSOperatingSystemVersion osVer = [[NSProcessInfo processInfo] operatingSystemVersion];
-		_mvkOSVersion = mvkMakeOSVersion((uint32_t)osVer.majorVersion, (uint32_t)osVer.minorVersion, (uint32_t)osVer.patchVersion);
-	}
+		return mvkMakeOSVersion((uint32_t)osVer.majorVersion, (uint32_t)osVer.minorVersion, (uint32_t)osVer.patchVersion);
+	}();
 	return _mvkOSVersion;
 }
 
@@ -79,12 +79,11 @@ __attribute__((constructor)) static void MVKInitTimestamps() {
 #pragma mark Process environment
 
 bool mvkGetEnvVar(const char* varName, string& evStr) {
-	@autoreleasepool {
-		NSDictionary* nsEnv = [[NSProcessInfo processInfo] environment];
-		NSString* nsStr = nsEnv[@(varName)];
-		if (nsStr) { evStr = nsStr.UTF8String; }
-		return nsStr != nil;
-	}
+	// getenv() reads the same process environment as NSProcessInfo,
+	// without building a dictionary of every variable on each call.
+	const char* pValue = getenv(varName);
+	if (pValue) { evStr = pValue; }
+	return pValue != nullptr;
 }
 
 const char* mvkGetEnvVarString(const char* varName, string& evStr, const char* defaultValue) {

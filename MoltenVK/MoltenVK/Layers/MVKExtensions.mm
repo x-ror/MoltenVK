@@ -43,8 +43,12 @@ static VkExtensionProperties mvkMakeExtProps(const char* extensionName, uint32_t
 static VkExtensionProperties kVkExtProps_ ##EXT = mvkMakeExtProps(VK_ ##EXT ##_EXTENSION_NAME, VK_ ##EXT ##_SPEC_VERSION);
 #include "MVKExtensions.def"
 
-// Returns whether the specified properties are valid for this platform
-static bool mvkIsSupportedOnPlatform(VkExtensionProperties* pProperties) {
+// Returns whether the specified properties are valid for this platform, given the minimum
+// OS versions of the extension, as listed in MVKExtensions.def.
+static bool mvkIsSupportedOnPlatform(VkExtensionProperties* pProperties,
+									 MVKOSVersion macOSMinVer,
+									 MVKOSVersion iOSMinVer,
+									 MVKOSVersion visionOSMinVer) {
 #define MVK_EXTENSION_MIN_OS(EXT, MAC, IOS, XROS) \
 	if (pProperties == &kVkExtProps_##EXT) { return mvkOSVersionIsAtLeast(MAC, IOS, XROS); }
 
@@ -68,27 +72,20 @@ static bool mvkIsSupportedOnPlatform(VkExtensionProperties* pProperties) {
 
 		return false;
 	}
-
-	// Otherwise, emumerate all available extensions to match the extension being validated for OS support.
-#define MVK_EXTENSION(var, EXT, type, macos, ios, xros)  MVK_EXTENSION_MIN_OS(EXT, macos, ios, xros)
-#include "MVKExtensions.def"
 #undef MVK_EXTENSION_MIN_OS
 
-	return false;
-}
-
-// Disable by default unless asked to enable for platform and the extension is valid for this platform
-MVKExtension::MVKExtension(VkExtensionProperties* pProperties, bool enableForPlatform) {
-	this->pProperties = pProperties;
-	this->enabled = enableForPlatform && mvkIsSupportedOnPlatform(pProperties);
+	// Otherwise, the extension is supported if the OS meets its minimum version.
+	return mvkOSVersionIsAtLeast(macOSMinVer, iOSMinVer, visionOSMinVer);
 }
 
 
 #pragma mark -
 #pragma mark MVKExtensionList
 
+// Disable by default unless asked to enable for platform and the extension is valid for this platform.
+// Each extension passes its own minimum OS versions, so building the list is linear in its length.
 MVKExtensionList::MVKExtensionList(MVKVulkanAPIObject* apiObject, bool enableForPlatform) :
-#define MVK_EXTENSION_LAST(var, EXT, type, macos, ios, xros)		vk_ ##var(&kVkExtProps_ ##EXT, enableForPlatform)
+#define MVK_EXTENSION_LAST(var, EXT, type, macos, ios, xros)		vk_ ##var(&kVkExtProps_ ##EXT, enableForPlatform && mvkIsSupportedOnPlatform(&kVkExtProps_ ##EXT, macos, ios, xros))
 #define MVK_EXTENSION(var, EXT, type, macos, ios, xros)			MVK_EXTENSION_LAST(var, EXT, type, macos, ios, xros),
 #include "MVKExtensions.def"
 	, _apiObject(apiObject)
@@ -143,6 +140,17 @@ bool MVKExtensionList::isEnabled(const char* extnName) const {
 		}
 	}
 	return false;
+}
+
+int32_t MVKExtensionList::getIndexOfExtension(const char* extnName) {
+	if ( !extnName ) { return -1; }
+
+	int32_t extnIdx = 0;
+#define MVK_EXTENSION(var, EXT, type, macos, ios, xros) \
+	if (mvkStringsAreEqual(kVkExtProps_ ##EXT.extensionName, extnName)) { return extnIdx; } \
+	extnIdx++;
+#include "MVKExtensions.def"
+	return -1;
 }
 
 void MVKExtensionList::enable(const char* extnName) {

@@ -364,6 +364,22 @@ class MVKBitArray {
 		return { _data, elemCount(_size) };
 	}
 
+	// Takes the contents of other, which must not share storage with this array,
+	// whose own storage must already be released. Leaves other as an empty array.
+	void takeFrom(MVKBitArray& other) {
+		_size = other._size;
+		if (other._data == &other._capacity) {
+			_data = &_capacity;
+			_capacity = other._capacity;	// The inline bits.
+		} else {
+			_data = other._data;
+			_capacity = other._capacity;
+		}
+		other._data = &other._capacity;
+		other._capacity = 0;
+		other._size = 0;
+	}
+
 public:
 	MVKBitArray(): _data(&_capacity) {}
 	MVKBitArray(std::size_t size, bool value): MVKBitArray() { resizeAndClear(size, value); }
@@ -379,9 +395,21 @@ public:
 			memcpy(_data, other._data, bytes);
 		}
 	}
+	/** Moving takes over a heap buffer, and leaves the source as an empty array. */
+	MVKBitArray(MVKBitArray&& other) noexcept: MVKBitArray() { takeFrom(other); }
 	~MVKBitArray() { freeBuffer(); }
 
+	MVKBitArray& operator=(MVKBitArray&& other) noexcept {
+		if (this != &other) {
+			freeBuffer();
+			_data = &_capacity;
+			takeFrom(other);
+		}
+		return *this;
+	}
+
 	MVKBitArray& operator=(const MVKBitArray& other) {
+		if (this == &other) { return *this; }
 		_size = other._size;
 		size_t elems = elemCount(other._size);
 		if (other._size <= ElemSize) {
@@ -417,13 +445,10 @@ public:
 
 		if (newSize > capacity()) {
 			freeBuffer();
-			_data = static_cast<std::size_t*>(calloc(elems, sizeof(std::size_t)));
+			_data = static_cast<std::size_t*>(malloc(elems * sizeof(std::size_t)));
 			_capacity = elems * ElemSize;
-			if (value)
-				memset(_data, 0xff, elems * sizeof(std::size_t));
-		} else {
-			memset(_data, value ? 0xff : 0, elems * sizeof(std::size_t));
 		}
+		memset(_data, value ? 0xff : 0, elems * sizeof(std::size_t));
 		if (value)
 			_data[elems - 1] = detail::maskHi<std::size_t>(newSize);
 	}

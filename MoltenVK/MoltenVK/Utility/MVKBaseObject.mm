@@ -51,16 +51,27 @@ void MVKBaseObject::reportMessage(MVKBaseObject* mvkObj, MVKConfigLogLevel logLe
 	va_end(args);
 }
 
+// Returns whether a message at the log level would be logged or forwarded to a debug callback.
+static bool mvkShouldReport(MVKInstance* mvkInst, MVKConfigLogLevel logLevel, bool& shouldLog, bool& hasDebugCallbacks) {
+	hasDebugCallbacks = mvkInst && mvkInst->hasDebugCallbacks();
+	shouldLog = logLevel <= mvkGetMVKConfig(mvkInst).logLevel;
+	return shouldLog || hasDebugCallbacks;
+}
+
+static MVKInstance* mvkGetInstance(MVKBaseObject* mvkObj) {
+	MVKVulkanAPIObject* mvkAPIObj = mvkObj ? mvkObj->getVulkanAPIObject() : nullptr;
+	return mvkAPIObj ? mvkAPIObj->getInstance() : nullptr;
+}
+
 // This is the core reporting implementation. Other similar functions delegate here.
 void MVKBaseObject::reportMessage(MVKBaseObject* mvkObj, MVKConfigLogLevel logLevel, const char* format, va_list args) {
 
 	MVKVulkanAPIObject* mvkAPIObj = mvkObj ? mvkObj->getVulkanAPIObject() : nullptr;
 	MVKInstance* mvkInst = mvkAPIObj ? mvkAPIObj->getInstance() : nullptr;
-	bool hasDebugCallbacks = mvkInst && mvkInst->hasDebugCallbacks();
-	bool shouldLog = logLevel <= mvkGetMVKConfig(mvkInst).logLevel;
+	bool hasDebugCallbacks, shouldLog;
 
 	// Fail fast to avoid further unnecessary processing.
-	if ( !(shouldLog || hasDebugCallbacks) ) { return; }
+	if ( !mvkShouldReport(mvkInst, logLevel, shouldLog, hasDebugCallbacks) ) { return; }
 
 	va_list origArgs, redoArgs;
 	va_copy(origArgs, args);
@@ -110,6 +121,10 @@ VkResult MVKBaseObject::reportResult(MVKBaseObject* mvkObj, VkResult vkErr, MVKC
 }
 
 VkResult MVKBaseObject::reportResult(MVKBaseObject* mvkObj, VkResult vkRslt, MVKConfigLogLevel logLevel, const char* format, va_list args) {
+
+	// Fail fast before formatting anything if the message would not be reported.
+	bool hasDebugCallbacks, shouldLog;
+	if ( !mvkShouldReport(mvkGetInstance(mvkObj), logLevel, shouldLog, hasDebugCallbacks) ) { return vkRslt; }
 
 	// Prepend the result code to the format string
 	const char* vkRsltName = mvkVkResultName(vkRslt);

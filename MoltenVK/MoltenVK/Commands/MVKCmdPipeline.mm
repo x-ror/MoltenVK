@@ -304,7 +304,7 @@ void MVKCmdBindDescriptorSetsStatic<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 template <size_t N>
 void MVKCmdBindDescriptorSetsStatic<N>::encode(MVKCommandEncoder* cmdEncoder, MVKArrayRef<uint32_t> dynamicOffsets) {
-	cmdEncoder->getState().bindDescriptorSets(_pipelineBindPoint, _pipelineLayout, _firstSet, static_cast<uint32_t>(_descriptorSets.size()), _descriptorSets.data(), static_cast<uint32_t>(dynamicOffsets.size()), dynamicOffsets.data());
+	cmdEncoder->getState().bindDescriptorSets(_pipelineBindPoint, _pipelineLayout, _firstSet, _descriptorSets.contents(), dynamicOffsets);
 }
 
 template <size_t N>
@@ -398,51 +398,73 @@ VkResult MVKCmdPushDescriptorSet::setContent(MVKCommandBuffer* cmdBuff,
 
 	_pipelineLayout->retain();
 
-	// Add the descriptor writes
+	// Add the descriptor writes. The image, buffer and texel buffer infos, and any inline
+	// uniform block and its data, are copied into one block of storage owned by this command, which is
+	// sized once up front so that the copies never move, and which is reused when the pooled
+	// command is recorded again. Every copied struct is aligned to 8 bytes within the block.
 	clearDescriptorWrites();	// Clear for reuse
 	_descriptorWrites.reserve(descriptorWriteCount);
+
+	auto alignedSize = [](size_t byteCount) { return (byteCount + 7) & ~size_t(7); };
+	auto findInlineUniformBlock = [](const VkWriteDescriptorSet& descWrite) -> const VkWriteDescriptorSetInlineUniformBlock* {
+		for (const auto* next = (VkBaseInStructure*)descWrite.pNext; next; next = next->pNext) {
+			if (next->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK) {
+				return (const VkWriteDescriptorSetInlineUniformBlock*)next;
+			}
+		}
+		return nullptr;
+	};
+
+	size_t dataSize = 0;
+	for (uint32_t dwIdx = 0; dwIdx < descriptorWriteCount; dwIdx++) {
+		const VkWriteDescriptorSet& descWrite = pDescriptorWrites[dwIdx];
+		if (descWrite.pImageInfo) { dataSize += alignedSize(descWrite.descriptorCount * sizeof(VkDescriptorImageInfo)); }
+		if (descWrite.pBufferInfo) { dataSize += alignedSize(descWrite.descriptorCount * sizeof(VkDescriptorBufferInfo)); }
+		if (descWrite.pTexelBufferView) { dataSize += alignedSize(descWrite.descriptorCount * sizeof(VkBufferView)); }
+		if (const auto* pInlineUniformBlock = findInlineUniformBlock(descWrite)) {
+			dataSize += alignedSize(sizeof(VkWriteDescriptorSetInlineUniformBlock)) + alignedSize(pInlineUniformBlock->dataSize);
+		}
+	}
+	_descriptorData.resize((dataSize + sizeof(uint64_t) - 1) / sizeof(uint64_t));
+	char* pData = (char*)_descriptorData.data();
+	size_t dataOffset = 0;
+	auto copyInto = [&](const void* pSrc, size_t byteCount) {
+		void* pDst = pData + dataOffset;
+		if (byteCount) { memcpy(pDst, pSrc, byteCount); }
+		dataOffset += alignedSize(byteCount);
+		return pDst;
+	};
+
 	for (uint32_t dwIdx = 0; dwIdx < descriptorWriteCount; dwIdx++) {
 		_descriptorWrites.push_back(pDescriptorWrites[dwIdx]);
 		VkWriteDescriptorSet& descWrite = _descriptorWrites.back();
-		// Make a copy of the associated data.
 		if (descWrite.pImageInfo) {
-			auto* pNewImageInfo = new VkDescriptorImageInfo[descWrite.descriptorCount];
-			std::copy_n(descWrite.pImageInfo, descWrite.descriptorCount, pNewImageInfo);
-			descWrite.pImageInfo = pNewImageInfo;
+			descWrite.pImageInfo = (VkDescriptorImageInfo*)copyInto(descWrite.pImageInfo, descWrite.descriptorCount * sizeof(VkDescriptorImageInfo));
 		}
 		if (descWrite.pBufferInfo) {
-			auto* pNewBufferInfo = new VkDescriptorBufferInfo[descWrite.descriptorCount];
-			std::copy_n(descWrite.pBufferInfo, descWrite.descriptorCount, pNewBufferInfo);
-			descWrite.pBufferInfo = pNewBufferInfo;
+			descWrite.pBufferInfo = (VkDescriptorBufferInfo*)copyInto(descWrite.pBufferInfo, descWrite.descriptorCount * sizeof(VkDescriptorBufferInfo));
 		}
 		if (descWrite.pTexelBufferView) {
-			auto* pNewTexelBufferView = new VkBufferView[descWrite.descriptorCount];
-			std::copy_n(descWrite.pTexelBufferView, descWrite.descriptorCount, pNewTexelBufferView);
-			descWrite.pTexelBufferView = pNewTexelBufferView;
+			descWrite.pTexelBufferView = (VkBufferView*)copyInto(descWrite.pTexelBufferView, descWrite.descriptorCount * sizeof(VkBufferView));
 		}
-		const VkWriteDescriptorSetInlineUniformBlock* pInlineUniformBlock = nullptr;
-		for (const auto* next = (VkBaseInStructure*)descWrite.pNext; next; next = next->pNext) {
-			switch (next->sType) {
-				case VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK: {
-					pInlineUniformBlock = (VkWriteDescriptorSetInlineUniformBlock*)next;
-					break;
-				}
-				default:
-					break;
-			}
-		}
+		const VkWriteDescriptorSetInlineUniformBlock* pInlineUniformBlock = findInlineUniformBlock(descWrite);
 		if (pInlineUniformBlock) {
-			auto *pNewInlineUniformBlock = new VkWriteDescriptorSetInlineUniformBlock(*pInlineUniformBlock);
+			auto* pNewInlineUniformBlock = (VkWriteDescriptorSetInlineUniformBlock*)copyInto(pInlineUniformBlock, sizeof(VkWriteDescriptorSetInlineUniformBlock));
 			pNewInlineUniformBlock->pNext = nullptr; // clear pNext just in case, no other extensions are supported at this time
+			// Copy the uniform data too, because the app's data need not outlive this call.
+			pNewInlineUniformBlock->pData = copyInto(pInlineUniformBlock->pData, pInlineUniformBlock->dataSize);
 			descWrite.pNext = pNewInlineUniformBlock;
+		} else {
+			descWrite.pNext = nullptr;
 		}
 	}
+	assert(dataOffset == dataSize);
 
 	return VK_SUCCESS;
 }
 
 void MVKCmdPushDescriptorSet::encode(MVKCommandEncoder* cmdEncoder) {
-	cmdEncoder->getState().pushDescriptorSet(_pipelineBindPoint, _pipelineLayout, _set, static_cast<uint32_t>(_descriptorWrites.size()), _descriptorWrites.data());
+	cmdEncoder->getState().pushDescriptorSet(_pipelineBindPoint, _pipelineLayout, _set, _descriptorWrites.contents());
 }
 
 MVKCmdPushDescriptorSet::~MVKCmdPushDescriptorSet() {
@@ -450,26 +472,10 @@ MVKCmdPushDescriptorSet::~MVKCmdPushDescriptorSet() {
 	if (_pipelineLayout) { _pipelineLayout->release(); }
 }
 
+// The copied infos live in _descriptorData, which keeps its storage for the next recording.
 void MVKCmdPushDescriptorSet::clearDescriptorWrites() {
-	for (VkWriteDescriptorSet &descWrite : _descriptorWrites) {
-		if (descWrite.pImageInfo) { delete[] descWrite.pImageInfo; }
-		if (descWrite.pBufferInfo) { delete[] descWrite.pBufferInfo; }
-		if (descWrite.pTexelBufferView) { delete[] descWrite.pTexelBufferView; }
-
-		const VkWriteDescriptorSetInlineUniformBlock* pInlineUniformBlock = nullptr;
-		for (const auto* next = (VkBaseInStructure*)descWrite.pNext; next; next = next->pNext) {
-			switch (next->sType) {
-				case VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK: {
-					pInlineUniformBlock = (VkWriteDescriptorSetInlineUniformBlock*)next;
-					break;
-				}
-				default:
-					break;
-			}
-		}
-		if (pInlineUniformBlock) { delete pInlineUniformBlock; }
-	}
 	_descriptorWrites.clear();
+	_descriptorData.clear();
 }
 
 

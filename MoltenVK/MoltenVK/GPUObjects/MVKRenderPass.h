@@ -383,35 +383,46 @@ protected:
 #pragma mark -
 #pragma mark MVKRenderingAttachmentIterator
 
-typedef std::function<void(const VkRenderingAttachmentInfo* pAttInfo,
-						   VkImageAspectFlagBits aspect,
-						   MVKImageView* imgView,
-						   bool isResolveAttachment)> MVKRenderingAttachmentInfoOperation;
-
 /**
  * Iterates the attachments in a VkRenderingInfo, and processes an operation
  * on each attachment, once for the imageView, and once for the resolveImageView.
+ *
+ * The operation is any callable of the form:
+ *     void(const VkRenderingAttachmentInfo* pAttInfo, VkImageAspectFlagBits aspect,
+ *          MVKImageView* imgView, bool isResolveAttachment)
+ * It is passed by reference, so no std::function is constructed or copied.
  *
  * Attachments are sequentially processed in this order:
  *     [color, color-resolve], ...,
  *     depth, depth-resolve,
  *     stencil, stencil-resolve
  */
-class MVKRenderingAttachmentIterator : public MVKBaseObject {
+class MVKRenderingAttachmentIterator {
 
 public:
 
-	MVKVulkanAPIObject* getVulkanAPIObject() override { return nullptr; }
-
 	/** Iterates the attachments with the specified lambda function. */
-	void iterate(MVKRenderingAttachmentInfoOperation attOperation);
+	template<typename Op>
+	void iterate(Op&& attOperation) const {
+		for (uint32_t caIdx = 0; caIdx < _renderingInfo.colorAttachmentCount; caIdx++) {
+			handleAttachment(&_renderingInfo.pColorAttachments[caIdx], VK_IMAGE_ASPECT_COLOR_BIT, attOperation);
+		}
+		handleAttachment(_renderingInfo.pDepthAttachment, VK_IMAGE_ASPECT_DEPTH_BIT, attOperation);
+		handleAttachment(_renderingInfo.pStencilAttachment, VK_IMAGE_ASPECT_STENCIL_BIT, attOperation);
+	}
 
-	MVKRenderingAttachmentIterator(const VkRenderingInfo* pRenderingInfo);
+	MVKRenderingAttachmentIterator(const VkRenderingInfo* pRenderingInfo) : _renderingInfo(*pRenderingInfo) {}
 
 protected:
-	void handleAttachment(const VkRenderingAttachmentInfo* pAttInfo,
-						  VkImageAspectFlagBits aspect,
-						  MVKRenderingAttachmentInfoOperation attOperation);
+	template<typename Op>
+	static void handleAttachment(const VkRenderingAttachmentInfo* pAttInfo,
+								 VkImageAspectFlagBits aspect,
+								 Op& attOperation) {
+		if (pAttInfo) {
+			attOperation(pAttInfo, aspect, (MVKImageView*)pAttInfo->imageView, false);
+			attOperation(pAttInfo, aspect, (MVKImageView*)pAttInfo->resolveImageView, true);
+		}
+	}
 
 	VkRenderingInfo _renderingInfo;
 };

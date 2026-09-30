@@ -238,7 +238,7 @@ VkResult MVKCommandBuffer::reset(VkCommandBufferResetFlags flags) {
 	_isReusable = false;
 	_supportsConcurrentExecution = false;
 	_wasExecuted = false;
-	_isExecutingNonConcurrently.clear();
+	_isExecutingNonConcurrently.clear(std::memory_order_release);
 	_commandCount = 0;
 	_currentSubpassInfo = {};
 	_needsVisibilityResultMTLBuffer = false;
@@ -282,7 +282,7 @@ void MVKCommandBuffer::checkDeferredEncoding() {
 }
 
 void MVKCommandBuffer::addCommand(MVKCommand* command) {
-    if ( !_canAcceptCommands ) {
+    if ( !_canAcceptCommands ) [[unlikely]] {
         setConfigurationResult(reportError(VK_NOT_READY, "Command buffer cannot accept commands before vkBeginCommandBuffer() is called."));
         return;
     }
@@ -315,7 +315,7 @@ void MVKCommandBuffer::submit(MVKQueueCommandBufferSubmission* cmdBuffSubmit,
 		encoder.encode(cmdBuffSubmit->getActiveMTLCommandBuffer(), pEncodingContext);
 	}
 
-	if ( !_supportsConcurrentExecution ) { _isExecutingNonConcurrently.clear(); }
+	if ( !_supportsConcurrentExecution ) { _isExecutingNonConcurrently.clear(std::memory_order_release); }
 }
 
 bool MVKCommandBuffer::canExecute() {
@@ -329,7 +329,7 @@ bool MVKCommandBuffer::canExecute() {
 	}
 
 	// Do this test last so that _isExecutingNonConcurrently is only set if everything else passes
-	if ( !_supportsConcurrentExecution && _isExecutingNonConcurrently.test_and_set()) {
+	if ( !_supportsConcurrentExecution && _isExecutingNonConcurrently.test_and_set(std::memory_order_acquire)) {
 		setConfigurationResult(reportError(VK_NOT_READY, "Command buffer does not support concurrent execution."));
 		return false;
 	}
@@ -608,7 +608,7 @@ void MVKCommandEncoder::endMetalEncoding(T& mtlEnc) {
 	mtlEnc = nil;
 }
 
-static MVKBarrierStage commandUseToBarrierStage(MVKCommandUse use) {
+static constexpr MVKBarrierStage commandUseToBarrierStage(MVKCommandUse use) {
 	switch (use) {
 	case kMVKCommandUseNone:                         return kMVKBarrierStageNone; /**< No use defined. */
 	case kMVKCommandUseBeginCommandBuffer:           return kMVKBarrierStageNone; /**< vkBeginCommandBuffer (prefilled VkCommandBuffer). */
@@ -807,16 +807,12 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
     mtlRPDesc.renderTargetHeight = max(min(raFullExtent.height, (fbExtent.height ? fbExtent.height : raFullExtent.height)), 1u);
     if (_canUseLayeredRendering) {
         uint32_t renderTargetArrayLength;
-        bool found3D = false, found2D = false;
-        for (uint32_t i = 0; i < 8; i++) {
-            id<MTLTexture> mtlTex = mtlRPDesc.colorAttachments[i].texture;
-            if (mtlTex == nil) { continue; }
-            switch (mtlTex.textureType) {
-                case MTLTextureType3D:
-                    found3D = true;
-                default:
-                    found2D = true;
-            }
+        // Any 3D color attachment counts as a mix of 3D and 2D attachments. This matches the previous
+        // check, whose 3D case fell through to also set its 2D flag, so an all-3D pass is treated as mixed.
+        bool hasMixed3D2D = false;
+        for (uint32_t caIdx = 0; caIdx < kMVKMaxColorAttachmentCount && !hasMixed3D2D; caIdx++) {
+            id<MTLTexture> mtlTex = mtlRPDesc.colorAttachments[caIdx].texture;
+            hasMixed3D2D = mtlTex && mtlTex.textureType == MTLTextureType3D;
         }
 
         if (getSubpass()->isMultiview()) {
@@ -827,7 +823,7 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 			renderTargetArrayLength = getFramebufferLayerCount();
         }
         // Metal does not allow layered render passes where some RTs are 3D and others are 2D.
-        if (!(found3D && found2D) || renderTargetArrayLength > 1) {
+        if ( !hasMixed3D2D || renderTargetArrayLength > 1) {
             mtlRPDesc.renderTargetArrayLength = renderTargetArrayLength;
         }
     }
@@ -988,10 +984,11 @@ void MVKCommandEncoder::clearRenderArea(MVKCommandUse cmdUse) {
 	if (clearAttCnt == 0) { return; }
 
 	if (!getSubpass()->isMultiview()) {
-		VkClearRect clearRect;
-		clearRect.rect = _renderArea;
-		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = getFramebufferLayerCount();
+		VkClearRect clearRect = {
+			.rect = _renderArea,
+			.baseArrayLayer = 0,
+			.layerCount = getFramebufferLayerCount(),
+		};
 
 		// Create and execute a temporary clear attachments command.
 		// To be threadsafe...do NOT acquire and return the command from the pool.
@@ -1078,7 +1075,7 @@ void MVKCommandEncoder::endCurrentMetalEncoding() {
 	encodeTimestampStageCounterSamples();
 }
 
-static MTLDispatchType getDispatchType(MVKCommandUse use) {
+static constexpr MTLDispatchType getDispatchType(MVKCommandUse use) {
 	switch (use) {
 		case kMVKCommandUseAccumOcclusionQuery:
 			return MTLDispatchTypeConcurrent;
@@ -1087,7 +1084,7 @@ static MTLDispatchType getDispatchType(MVKCommandUse use) {
 	}
 }
 
-static bool wantsSeparateComputeEncoder(MVKCommandUse use) {
+static constexpr bool wantsSeparateComputeEncoder(MVKCommandUse use) {
 	switch (use) {
 		case kMVKCommandUseAccumOcclusionQuery:
 			return true;
@@ -1096,7 +1093,7 @@ static bool wantsSeparateComputeEncoder(MVKCommandUse use) {
 	}
 }
 
-static bool shouldStartNewEncoder(MVKCommandUse prev, MVKCommandUse next) {
+static constexpr bool shouldStartNewEncoder(MVKCommandUse prev, MVKCommandUse next) {
 	if (prev == next)
 		return false;
 	if (getDispatchType(prev) != getDispatchType(next))
@@ -1208,7 +1205,7 @@ const MVKMTLBufferAllocation* MVKCommandEncoder::getTempMTLBuffer(NSUInteger len
 void MVKCommandEncoder::returnTempMTLBuffersOnCompletion() {
 	if (_tempMTLBufferAllocations.empty()) { return; }
 
-	auto* pAllocs = new MVKSmallVector<MVKMTLBufferAllocation*, 16>(_tempMTLBufferAllocations);
+	auto* pAllocs = new MVKSmallVector<MVKMTLBufferAllocation*, 16>(std::move(_tempMTLBufferAllocations));
 	_tempMTLBufferAllocations.clear();
 	[_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
 		MVKMTLBufferAllocationPool::returnAllocations(pAllocs->contents());
@@ -1378,20 +1375,7 @@ void MVKCommandEncoder::finishQueries() {
 MVKCommandEncoder::MVKCommandEncoder(MVKCommandBuffer* cmdBuffer, MVKPrefillMetalCommandBuffersStyle prefillStyle)
 	: MVKBaseDeviceObject(cmdBuffer->getDevice())
 	, _cmdBuffer(cmdBuffer)
-	, _prefillStyle(prefillStyle) {
-	_pActivatedQueries = nullptr;
-	_mtlCmdBuffer = nil;
-	_mtlRenderEncoder = nil;
-	_hasMTLRenderEncoderVisibilityResultBuffer = false;
-	_mtlComputeEncoder = nil;
-	_mtlComputeEncoderUse = kMVKCommandUseNone;
-	_mtlComputeEncoderStages = 0;
-	_mtlBlitEncoder = nil;
-	_mtlBlitEncoderUse = kMVKCommandUseNone;
-	_pEncodingContext = nullptr;
-	_stageCountersMTLFence = nil;
-	_flushCount = 0;
-}
+	, _prefillStyle(prefillStyle) {}
 
 MVKCommandEncoder::~MVKCommandEncoder() {
 	[_mtlRenderEncoder release];

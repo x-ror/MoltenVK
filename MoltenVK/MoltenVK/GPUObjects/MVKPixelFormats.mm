@@ -673,8 +673,11 @@ MTLTextureUsage MVKPixelFormats::getMTLTextureUsage(VkImageUsageFlags vkImageUsa
 }
 
 // Return a reference to the Vulkan format descriptor corresponding to the VkFormat.
+// An unknown VkFormat returns the VK_FORMAT_UNDEFINED descriptor. The lookup never
+// modifies the table, which is shared between threads once it has been built.
 MVKVkFormatDesc& MVKPixelFormats::getVkFormatDesc(VkFormat vkFormat) {
-	return _vkFormatDescriptions[vkFormat];
+	MVKVkFormatDesc* pDesc = _vkFormatDescriptions.find(vkFormat);
+	return pDesc ? *pDesc : _vkFormatDescriptions[VK_FORMAT_UNDEFINED];
 }
 
 // Return a reference to the Vulkan format descriptor corresponding to the MTLPixelFormat.
@@ -683,13 +686,17 @@ MVKVkFormatDesc& MVKPixelFormats::getVkFormatDesc(MTLPixelFormat mtlFormat) {
 }
 
 // Return a reference to the Metal format descriptor corresponding to the MTLPixelFormat.
+// An unknown MTLPixelFormat returns the MTLPixelFormatInvalid descriptor. The lookup never
+// modifies the table, which is shared between threads once it has been built.
 MVKMTLFormatDesc& MVKPixelFormats::getMTLPixelFormatDesc(MTLPixelFormat mtlFormat) {
-	return _mtlPixelFormatDescriptions[mtlFormat];
+	MVKMTLFormatDesc* pDesc = _mtlPixelFormatDescriptions.find(mtlFormat);
+	return pDesc ? *pDesc : _mtlPixelFormatDescriptions[MTLPixelFormatInvalid];
 }
 
 // Return a reference to the Metal format descriptor corresponding to the MTLVertexFormat.
+// An unknown MTLVertexFormat returns the MTLVertexFormatInvalid descriptor.
 MVKMTLFormatDesc& MVKPixelFormats::getMTLVertexFormatDesc(MTLVertexFormat mtlFormat) {
-	return _mtlVertexFormatDescriptions[mtlFormat];
+	return _mtlVertexFormatDescriptions[mtlFormat < _mtlVertexFormatDescriptions.size() ? mtlFormat : MTLVertexFormatInvalid];
 }
 
 VkFormatFeatureFlags MVKPixelFormats::convertFormatPropertiesFlagBits(VkFormatFeatureFlags2 flags) {
@@ -1363,11 +1370,11 @@ void MVKPixelFormats::initMTLVertexFormatCapabilities(const MVKMTLDeviceCapabili
 MVKMTLFmtCaps& MVKPixelFormats::getMTLPixelFormatCapsIf(MTLPixelFormat mtlPixFmt, bool cond) {
 	static MVKMTLFmtCaps dummyFmtCaps;
 	if (mtlPixFmt && cond) {
-		return getMTLPixelFormatDesc(mtlPixFmt).mtlFmtCaps;
-	} else {
-		dummyFmtCaps = kMVKMTLFmtCapsNone;
-		return dummyFmtCaps;
+		MVKMTLFormatDesc* pDesc = _mtlPixelFormatDescriptions.find(mtlPixFmt);
+		if (pDesc) { return pDesc->mtlFmtCaps; }
 	}
+	dummyFmtCaps = kMVKMTLFmtCapsNone;
+	return dummyFmtCaps;
 }
 
 #define setMTLPixFmtCapsIf(cond, mtlFmt, caps)           getMTLPixelFormatCapsIf(MTLPixelFormat ##mtlFmt, cond) = kMVKMTLFmtCaps ##caps;
@@ -1501,14 +1508,17 @@ void MVKPixelFormats::buildVkFormatMaps(const MVKMTLDeviceCapabilities& gpuCaps)
 		// Populate the back reference from the Metal formats to the Vulkan format.
 		// Validate the corresponding Metal formats for the platform, and clear them
 		// if the Vulkan format if not supported.
+		// A Metal format that was not added for this platform has no descriptor. Treat it as
+		// unsupported without looking it up through getMTLPixelFormatDesc(), which would
+		// otherwise hand back the MTLPixelFormatInvalid descriptor to be written to.
 		if (vkDesc.mtlPixelFormat) {
-			auto& mtlDesc = getMTLPixelFormatDesc(vkDesc.mtlPixelFormat);
-			if ( !mtlDesc.vkFormat ) { mtlDesc.vkFormat = vkDesc.vkFormat; }
-			if ( !mtlDesc.isSupported() ) { vkDesc.mtlPixelFormat = MTLPixelFormatInvalid; }
+			auto* pMTLDesc = _mtlPixelFormatDescriptions.find(vkDesc.mtlPixelFormat);
+			if (pMTLDesc && !pMTLDesc->vkFormat ) { pMTLDesc->vkFormat = vkDesc.vkFormat; }
+			if ( !pMTLDesc || !pMTLDesc->isSupported() ) { vkDesc.mtlPixelFormat = MTLPixelFormatInvalid; }
 		}
 		if (vkDesc.mtlPixelFormatSubstitute) {
-			auto& mtlDesc = getMTLPixelFormatDesc(vkDesc.mtlPixelFormatSubstitute);
-			if ( !mtlDesc.isSupported() ) { vkDesc.mtlPixelFormatSubstitute = MTLPixelFormatInvalid; }
+			auto* pMTLDesc = _mtlPixelFormatDescriptions.find(vkDesc.mtlPixelFormatSubstitute);
+			if ( !pMTLDesc || !pMTLDesc->isSupported() ) { vkDesc.mtlPixelFormatSubstitute = MTLPixelFormatInvalid; }
 		}
 		if (vkDesc.mtlVertexFormat) {
 			auto& mtlDesc = getMTLVertexFormatDesc(vkDesc.mtlVertexFormat);

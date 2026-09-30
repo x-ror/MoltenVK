@@ -19,7 +19,9 @@
 #ifndef __MVKStrings_h_
 #define __MVKStrings_h_ 1
 
+#include <cctype>
 #include <string>
+#include <string_view>
 #include <streambuf>
 #include <vector>
 #include <cxxabi.h>
@@ -29,34 +31,37 @@ namespace mvk {
 #pragma mark -
 #pragma mark Strings
 
-    static std::string _mvkDefaultWhitespaceChars = " \f\n\r\t\v";
+    /** The characters trimmed by default. A view of a literal, so no string is constructed in each translation unit. */
+    inline constexpr std::string_view _mvkDefaultWhitespaceChars = " \f\n\r\t\v";
 
     /** Returns a string with whitespace trimmed from the right end of the specified string. */
-    inline std::string trim_right(const std::string& s, const std::string& delimiters = _mvkDefaultWhitespaceChars) {
+    inline std::string trim_right(std::string_view s, std::string_view delimiters = _mvkDefaultWhitespaceChars) {
         size_t endPos = s.find_last_not_of(delimiters);
-        return (endPos != std::string::npos) ? s.substr(0, endPos + 1) : "";
+        return std::string((endPos != std::string_view::npos) ? s.substr(0, endPos + 1) : std::string_view());
     }
 
     /** Returns a string with whitespace trimmed from the left end of the specified string. */
-    inline std::string trim_left(const std::string& s, const std::string& delimiters = _mvkDefaultWhitespaceChars) {
+    inline std::string trim_left(std::string_view s, std::string_view delimiters = _mvkDefaultWhitespaceChars) {
         size_t startPos = s.find_first_not_of(delimiters);
-        return (startPos != std::string::npos) ? s.substr(startPos) : "";
+        return std::string((startPos != std::string_view::npos) ? s.substr(startPos) : std::string_view());
     }
 
     /** Returns a string with whitespace trimmed from both ends of the specified string. */
-    inline std::string trim(const std::string& s, const std::string& delimiters = _mvkDefaultWhitespaceChars) {
+    inline std::string trim(std::string_view s, std::string_view delimiters = _mvkDefaultWhitespaceChars) {
         size_t startPos = s.find_first_not_of(delimiters);
         size_t endPos = s.find_last_not_of(delimiters);
-        return ( (startPos != std::string::npos) && (endPos != std::string::npos) ) ? s.substr(startPos, endPos + 1) : "";
+        return std::string( ( (startPos != std::string_view::npos) && (endPos != std::string_view::npos) )
+                           ? s.substr(startPos, endPos - startPos + 1) : std::string_view() );
     }
 
 	/** Cleanse variable name by replacing any illegal chars and leading digit with underscores. */
-	inline std::string cleanseVarName(const std::string& name) {
+	inline std::string cleanseVarName(std::string_view name) {
 		std::string varName(name);
 		size_t cCnt = varName.length();
 		for (size_t cIdx = 0; cIdx < cCnt; cIdx++) {
 			char& c = varName[cIdx];
-			if ( !(c == '_' || isalpha(c) || (isdigit(c) && cIdx > 0)) ) { c = '_'; }
+			unsigned char uc = static_cast<unsigned char>(c);	// The <cctype> functions require a value representable as unsigned char.
+			if ( !(c == '_' || isalpha(uc) || (isdigit(uc) && cIdx > 0)) ) { c = '_'; }
 		}
 		return varName;
 	}

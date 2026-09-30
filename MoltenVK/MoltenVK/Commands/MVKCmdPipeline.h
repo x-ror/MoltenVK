@@ -273,6 +273,7 @@ protected:
 	void clearDescriptorWrites();
 
 	MVKSmallVector<VkWriteDescriptorSet, 1> _descriptorWrites;
+	MVKSmallVector<uint64_t, 32> _descriptorData;	// Copies of the write infos, in one block that the pooled command reuses.
 	MVKPipelineLayout* _pipelineLayout = nullptr;
 	VkPipelineBindPoint _pipelineBindPoint;
 	uint32_t _set;

@@ -33,14 +33,33 @@ using namespace std;
 #pragma mark -
 #pragma mark MVKInstance
 
-MVKEntryPoint* MVKInstance::getEntryPoint(const char* pName) {
-	auto iter = _entryPoints.find(pName);
-	return (iter != _entryPoints.end()) ? &iter->second : nullptr;
+const MVKEntryPoint* MVKInstance::getEntryPoint(const char* pName) {
+	if ( !pName ) { return nullptr; }
+	const MVKEntryPointMap& entryPoints = getEntryPointMap();
+	auto iter = entryPoints.find(std::string_view(pName));
+	return (iter != entryPoints.end()) ? &iter->second : nullptr;
+}
+
+// The entry point table does not depend on the instance, so it is built once, on first use,
+// and shared by all instances. The extension names are resolved to extension list indexes
+// here, so that checking whether an entry point is enabled does not compare strings.
+const MVKEntryPointMap& MVKInstance::getEntryPointMap() {
+	static const MVKEntryPointMap entryPointMap = []() {
+		MVKEntryPointMap epMap;
+		initProcAddrs(epMap);
+		for (auto& epPair : epMap) {
+			MVKEntryPoint& ep = epPair.second;
+			ep.extIdx = MVKExtensionList::getIndexOfExtension(ep.extName);
+			ep.ext2Idx = MVKExtensionList::getIndexOfExtension(ep.ext2Name);
+		}
+		return epMap;
+	}();
+	return entryPointMap;
 }
 
 // Returns core instance commands, enabled instance extension commands, and all device commands.
 PFN_vkVoidFunction MVKInstance::getProcAddr(const char* pName) {
-	MVKEntryPoint* pMVKPA = getEntryPoint(pName);
+	const MVKEntryPoint* pMVKPA = getEntryPoint(pName);
 
 	bool isSupported = (pMVKPA &&														// Command exists and...
 						(pMVKPA->isDevice || pMVKPA->isInstanceDeviceExtEntrypoint ||	// ...is a device command or...
@@ -308,7 +327,6 @@ MVKInstance::MVKInstance(const VkInstanceCreateInfo* pCreateInfo) : _enabledExte
 	// Ensure the API version includes the Vulkan header patch number
 	_appInfo.apiVersion = MVK_VULKAN_API_VERSION_HEADER(_appInfo.apiVersion);
 
-	initProcAddrs();				// Init function pointers. After extensions enabled.
 	logVersions();					// Log the MoltenVK and Vulkan versions. After config.
 
 	// Populate the array of physical GPU devices.
@@ -396,7 +414,7 @@ void MVKInstance::initMVKConfig(const VkInstanceCreateInfo* pCreateInfo) {
 }
 
 #define ADD_ENTRY_POINT_MAP(name, func, api, ext, api2, ext2, isDev, isInstanceDev)  \
-	_entryPoints[""#name] = { (PFN_vkVoidFunction)&func, ext, ext2, api, api2, isDev, isInstanceDev }
+	entryPoints[""#name] = { (PFN_vkVoidFunction)&func, ext, ext2, api, api2, isDev, isInstanceDev }
 
 #define ADD_ENTRY_POINT(func, api, ext, api2, ext2, isDev)	ADD_ENTRY_POINT_MAP(func, func, api, ext, api2, ext2, isDev, false)
 
@@ -461,7 +479,7 @@ void MVKInstance::initMVKConfig(const VkInstanceCreateInfo* pCreateInfo) {
 	ADD_ENTRY_POINT(func, 0, VK_##EXT1##_EXTENSION_NAME, VK_API_VERSION_##API, VK_##EXT2##_EXTENSION_NAME, true)
 
 // Initializes the function pointer map.
-void MVKInstance::initProcAddrs() {
+void MVKInstance::initProcAddrs(MVKEntryPointMap& entryPoints) {
 
 	// Instance functions.
 	ADD_INST_ENTRY_POINT(vkDestroyInstance);

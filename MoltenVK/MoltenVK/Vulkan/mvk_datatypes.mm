@@ -32,11 +32,10 @@ using namespace std;
 
 #pragma mark Pixel formats
 
-static std::unique_ptr<MVKPixelFormats> _platformPixelFormats;
-
+// Thread-safe lazy creation via a function-local static.
 static MVKPixelFormats* getPlatformPixelFormats() {
-	if ( !_platformPixelFormats ) { _platformPixelFormats.reset(new MVKPixelFormats()); }
-	return _platformPixelFormats.get();
+	static std::unique_ptr<MVKPixelFormats> platformPixelFormats(new MVKPixelFormats());
+	return platformPixelFormats.get();
 }
 
 MVK_PUBLIC_SYMBOL bool mvkVkFormatIsSupported(VkFormat vkFormat) {
@@ -285,13 +284,7 @@ MVK_PUBLIC_SYMBOL int32_t mvkVkClearColorIntValueFromVkComponentSwizzle(int32_t 
 
 MVK_PUBLIC_SYMBOL uint32_t mvkMipmapLevels(uint32_t dim) {
 	if ( !mvkIsPowerOfTwo(dim) ) { return 0; }
-
-	uint32_t exp = 0;
-	while (dim) {
-		exp++;
-		dim >>= 1;
-	}
-	return exp;
+	return std::bit_width(dim);
 }
 
 MVK_PUBLIC_SYMBOL uint32_t mvkMipmapLevels2D(VkExtent2D extent) {
@@ -738,6 +731,7 @@ MVK_PUBLIC_SYMBOL size_t mvkMTLIndexTypeSizeInBytes(MTLIndexType mtlIdxType) {
 	switch (mtlIdxType) {
 		case MTLIndexTypeUInt16:	return 2;
 		case MTLIndexTypeUInt32:	return 4;
+		default:					return 2;
 	}
 }
 

@@ -209,17 +209,17 @@ void MVKTimelineSemaphoreMTLEvent::signal(const VkSemaphoreSignalInfo* pSignalIn
 
 bool MVKTimelineSemaphoreMTLEvent::registerWait(MVKFenceSitter* sitter, const VkSemaphoreWaitInfo* pWaitInfo, uint32_t index) {
 	if (_mtlEvent.signaledValue >= pWaitInfo->pValues[index]) { return true; }
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 	sitter->await();
-	auto addRslt = _sitters.insert(sitter);
-	if (addRslt.second) {
+	if ( !mvkContains(_sitters, sitter) ) {
+		_sitters.push_back(sitter);
 		retain();
 		_device->addSemaphore(&sitter->_blocker);
-		[_mtlEvent notifyListener: sitter->getMTLSharedEventListener()
+		[_mtlEvent notifyListener: _device->getMTLSharedEventListener()
 						  atValue: pWaitInfo->pValues[index]
 							block: ^(id<MTLSharedEvent>, uint64_t) {
-			lock_guard<mutex> blockLock(_lock);
-			if (_sitters.count(sitter)) { sitter->signaled(); }
+			lock_guard<MVKUnfairLock> blockLock(_lock);
+			if (mvkContains(_sitters, sitter)) { sitter->signaled(); }
 			release();
 		}];
 	}
@@ -227,9 +227,9 @@ bool MVKTimelineSemaphoreMTLEvent::registerWait(MVKFenceSitter* sitter, const Vk
 }
 
 void MVKTimelineSemaphoreMTLEvent::unregisterWait(MVKFenceSitter* sitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 	_device->removeSemaphore(&sitter->_blocker);
-	_sitters.erase(sitter);
+	mvkRemoveFirstOccurance(_sitters, sitter);
 }
 
 MVKTimelineSemaphoreMTLEvent::MVKTimelineSemaphoreMTLEvent(MVKDevice* device,
@@ -257,29 +257,29 @@ MVKTimelineSemaphoreMTLEvent::~MVKTimelineSemaphoreMTLEvent() {
 #pragma mark MVKFence
 
 void MVKFence::addSitter(MVKFenceSitter* fenceSitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	// We only care about unsignaled fences. If already signaled,
 	// don't add myself to the sitter and don't signal the sitter.
 	if (_isSignaled) { return; }
 
 	// Ensure each fence only added once to each fence sitter
-	auto addRslt = _fenceSitters.insert(fenceSitter);	// pair with second element true if was added
-	if (addRslt.second) {
+	if ( !mvkContains(_fenceSitters, fenceSitter) ) {
+		_fenceSitters.push_back(fenceSitter);
 		_device->addSemaphore(&fenceSitter->_blocker);
 		fenceSitter->await();
 	}
 }
 
 void MVKFence::removeSitter(MVKFenceSitter* fenceSitter) {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	_device->removeSemaphore(&fenceSitter->_blocker);
-	_fenceSitters.erase(fenceSitter);
+	mvkRemoveFirstOccurance(_fenceSitters, fenceSitter);
 }
 
 void MVKFence::signal() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	if (_isSignaled) { return; }	// Only signal once
 	_isSignaled = true;
@@ -292,26 +292,16 @@ void MVKFence::signal() {
 }
 
 void MVKFence::reset() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	_isSignaled = false;
 	_fenceSitters.clear();
 }
 
 bool MVKFence::getIsSignaled() {
-	lock_guard<mutex> lock(_lock);
+	lock_guard<MVKUnfairLock> lock(_lock);
 
 	return _isSignaled;
-}
-
-
-#pragma mark -
-#pragma mark MVKFenceSitter
-
-MTLSharedEventListener* MVKFenceSitter::getMTLSharedEventListener() {
-	// TODO: Use dispatch queue from device?
-	if (!_listener) { _listener = [MTLSharedEventListener new]; }
-	return _listener;
 }
 
 
@@ -444,7 +434,7 @@ VkResult mvkWaitSemaphores(MVKDevice* device,
 // The thread dispatch is needed because even the sync portion of the async Metal compilation methods can take well
 // over a second to return when a compiler failure occurs!
 void MVKMetalCompiler::compile(unique_lock<mutex>& lock, dispatch_block_t block) {
-	MVKAssert( _startTime == 0, "%s compile occurred already in this instance. Instances of %s should only be used for a single compile activity.", _compilerType.c_str(), getClassName().c_str());
+	MVKAssert( _startTime == 0, "%s compile occurred already in this instance. Instances of %s should only be used for a single compile activity.", _compilerType, getClassName().c_str());
 
 	_startTime = getPerformanceTimestamp();
 
@@ -469,7 +459,7 @@ void MVKMetalCompiler::compile(unique_lock<mutex>& lock, dispatch_block_t block)
 void MVKMetalCompiler::handleError() {
 	_owner->setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED,
 											   "%s compile failed (Error code %li):\n%s.",
-											   _compilerType.c_str(), (long)_compileError.code,
+											   _compilerType, (long)_compileError.code,
 											   _compileError.localizedDescription.UTF8String));
 }
 
@@ -521,7 +511,7 @@ void MVKDeferredOperation::deferOperation(const MVKDeferredOperationFunctionPoin
     _functionType = type;
 
 	_functionParameters.reserve(paramCount);
-	for(int i = 0; i < paramCount; i++) {
+	for (uint32_t i = 0; i < paramCount; i++) {
         _functionParameters.push_back(parameters[i]);
     }
 

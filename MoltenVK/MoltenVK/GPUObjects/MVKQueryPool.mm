@@ -33,21 +33,30 @@ using namespace std;
 void MVKQueryPool::endQuery(uint32_t query, MVKCommandEncoder* cmdEncoder) {
     uint32_t queryCount = cmdEncoder->isInRenderPass() ? cmdEncoder->getSubpass()->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
     queryCount = max(queryCount, 1u);
-    lock_guard<mutex> lock(_availabilityLock);
-    for (uint32_t i = query; i < query + queryCount; ++i) {
-        _availability[i] = DeviceAvailable;
-    }
-    lock_guard<mutex> copyLock(_deferredCopiesLock);
-    if (!_deferredCopies.empty()) {
-        // Partition by readiness.
-        auto ready = std::partition(_deferredCopies.begin(), _deferredCopies.end(), [this](const DeferredCopy& copy) {
-            return !areQueriesDeviceAvailable(copy.firstQuery, copy.queryCount);
-        });
-        // Execute the ready copies, then remove them.
-        for (auto i = ready; i != _deferredCopies.end(); ++i) {
-            encodeCopyResults(cmdEncoder, i->firstQuery, i->queryCount, i->destBuffer, i->destOffset, i->stride, i->flags);
+    // Collect the deferred copies that are now ready while holding the locks, but encode them
+    // after releasing the locks: encodeCopyResults() takes _availabilityLock itself on the
+    // compute path, and the lock is not recursive.
+    MVKSmallVector<DeferredCopy, 4> readyCopies;
+    {
+        lock_guard<mutex> lock(_availabilityLock);
+        for (uint32_t i = query; i < query + queryCount; ++i) {
+            _availability[i] = DeviceAvailable;
         }
-        _deferredCopies.erase(ready, _deferredCopies.end());
+        lock_guard<mutex> copyLock(_deferredCopiesLock);
+        if (!_deferredCopies.empty()) {
+            // Partition by readiness.
+            auto ready = std::partition(_deferredCopies.begin(), _deferredCopies.end(), [this](const DeferredCopy& copy) {
+                return !areQueriesDeviceAvailable(copy.firstQuery, copy.queryCount);
+            });
+            // Move the ready copies out, then remove them.
+            for (auto i = ready; i != _deferredCopies.end(); ++i) {
+                readyCopies.push_back(*i);
+            }
+            _deferredCopies.erase(ready, _deferredCopies.end());
+        }
+    }
+    for (auto& copy : readyCopies) {
+        encodeCopyResults(cmdEncoder, copy.firstQuery, copy.queryCount, copy.destBuffer, copy.destOffset, copy.stride, copy.flags);
     }
 }
 

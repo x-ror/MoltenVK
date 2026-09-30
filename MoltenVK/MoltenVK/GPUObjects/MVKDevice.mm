@@ -136,6 +136,15 @@ MVKMTLDeviceCapabilities::MVKMTLDeviceCapabilities(id<MTLDevice> mtlDev) {
 }
 
 
+// Stores the bytes of the value at the destination, which need not be aligned for the value's type.
+// Writing through a cast pointer into a byte array would violate strict aliasing.
+template <typename T>
+static void mvkStoreBytes(uint8_t* pDst, T value) {
+	static_assert(std::is_trivially_copyable_v<T>);
+	memcpy(pDst, &value, sizeof(value));
+}
+
+
 #pragma mark -
 #pragma mark MVKPhysicalDevice
 
@@ -1400,12 +1409,12 @@ void MVKPhysicalDevice::populateHostImageCopyProperties(HostImageCopyProps* pHos
 
 	// First 4 bytes contains GPU vendor ID.
 	// Use Big-Endian byte ordering, so a hex dump is human readable
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(_properties.vendorID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(_properties.vendorID));
 	uuidComponentOffset += sizeof(uint32_t);
 
 	// Next 4 bytes contains GPU device ID
 	// Use Big-Endian byte ordering, so a hex dump is human readable
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(_properties.deviceID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(_properties.deviceID));
 	uuidComponentOffset += sizeof(uint32_t);
 
 	// Next 4 bytes contains OS version
@@ -1436,17 +1445,17 @@ void MVKPhysicalDevice::populateDeviceIDProperties(VkPhysicalDeviceVulkan11Prope
 
 	// First 4 bytes contains GPU vendor ID
 	uint32_t vendorID = _properties.vendorID;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(vendorID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(vendorID));
 	uuidComponentOffset += sizeof(vendorID);
 
 	// Next 4 bytes contains GPU device ID
 	uint32_t deviceID = _properties.deviceID;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(deviceID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(deviceID));
 	uuidComponentOffset += sizeof(deviceID);
 
 	// Last 8 bytes contain the GPU location identifier
 	uint64_t locID = mvkGetLocationID(_mtlDevice);
-	*(uint64_t*)&uuid[uuidComponentOffset] = NSSwapHostLongLongToBig(locID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostLongLongToBig(locID));
 	uuidComponentOffset += sizeof(locID);
 
 	// ---- Driver ID ----------------------------------------------
@@ -1462,16 +1471,16 @@ void MVKPhysicalDevice::populateDeviceIDProperties(VkPhysicalDeviceVulkan11Prope
 
 	// Next 4 bytes contains MoltenVK version
 	uint32_t mvkVersion = MVK_VERSION;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(mvkVersion);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(mvkVersion));
 	uuidComponentOffset += sizeof(mvkVersion);
 
 	// Next 4 bytes contains highest GPU capability supported by this device
 	uint32_t gpuCap = getHighestGPUCapability();
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(gpuCap);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(gpuCap));
 	uuidComponentOffset += sizeof(gpuCap);
 
 	// ---- Device LUID ------------------------
-	*(uint64_t*)pVk11Props->deviceLUID = NSSwapHostLongLongToBig(_mtlDevice.registryID);
+	mvkStoreBytes(pVk11Props->deviceLUID, NSSwapHostLongLongToBig(_mtlDevice.registryID));
 	pVk11Props->deviceNodeMask = 1;		// Per Vulkan spec
 	pVk11Props->deviceLUIDValid = VK_TRUE;
 }
@@ -2152,8 +2161,8 @@ VkResult MVKPhysicalDevice::getSurfaceFormats(MVKSurface* surface,
 	if (pSurfaceFormats) {
 		// Populate temp array of VkSurfaceFormatKHR then copy into array of VkSurfaceFormat2KHR.
 		// The value of *pCount may be reduced during call, but will always be <= size of temp array.
-		VkSurfaceFormatKHR surfFmts[*pCount];
-		rslt = getSurfaceFormats(surface, pCount, surfFmts);
+		MVKSmallVector<VkSurfaceFormatKHR, 64> surfFmts(*pCount);
+		rslt = getSurfaceFormats(surface, pCount, surfFmts.data());
 		for (uint32_t fmtIdx = 0; fmtIdx < *pCount; fmtIdx++) {
 			auto pSF = &pSurfaceFormats[fmtIdx];
 			pSF->sType = VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR;
@@ -2294,8 +2303,8 @@ VkResult MVKPhysicalDevice::getQueueFamilyProperties(uint32_t* pCount,
 	if (pQueueFamilyProperties) {
 		// Populate temp array of VkQueueFamilyProperties then copy into array of VkQueueFamilyProperties2KHR.
 		// The value of *pCount may be reduced during call, but will always be <= size of temp array.
-		VkQueueFamilyProperties qProps[*pCount];
-		rslt = getQueueFamilyProperties(pCount, qProps);
+		MVKSmallVector<VkQueueFamilyProperties, kMVKQueueFamilyCount> qProps(*pCount);
+		rslt = getQueueFamilyProperties(pCount, qProps.data());
 		for (uint32_t qpIdx = 0; qpIdx < *pCount; qpIdx++) {
 			auto pQP = &pQueueFamilyProperties[qpIdx];
 			pQP->queueFamilyProperties = qProps[qpIdx];
@@ -3296,19 +3305,19 @@ void MVKPhysicalDevice::initPipelineCacheUUID() {
 	// This is captured either as the MoltenVK Git revision, or if that's not available, as the MoltenVK version.
 	uint32_t mvkRev = getMoltenVKGitRevision();
 	if ( !mvkRev ) { mvkRev = MVK_VERSION; }
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(mvkRev);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(mvkRev));
 	uuidComponentOffset += sizeof(mvkRev);
 
 	// Next 4 bytes contains highest GPU capability supported by this device
 	uint32_t gpuCap = getHighestGPUCapability();
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(gpuCap);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(gpuCap));
 	uuidComponentOffset += sizeof(gpuCap);
 
 	// Next 4 bytes contains flags based on enabled Metal features that
 	// might affect the contents of the pipeline cache (mostly MSL content).
 	uint32_t mtlFeatures = 0;
 	mtlFeatures |= _isUsingMetalArgumentBuffers << 0;
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(mtlFeatures);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(mtlFeatures));
 	uuidComponentOffset += sizeof(mtlFeatures);
 }
 
@@ -3852,7 +3861,7 @@ uint32_t MVKVisibilityBuffer::advanceOffset() {
 // Returns core device commands and enabled extension device commands.
 PFN_vkVoidFunction MVKDevice::getProcAddr(const char* pName) {
 	MVKInstance* pMVKInst = _physicalDevice->_mvkInstance;
-	MVKEntryPoint* pMVKPA = pMVKInst->getEntryPoint(pName);
+	const MVKEntryPoint* pMVKPA = pMVKInst->getEntryPoint(pName);
 	uint32_t apiVersion = pMVKInst->_appInfo.apiVersion;
 
 	bool isSupported = (pMVKPA &&																			// Command exists and...
@@ -4617,11 +4626,30 @@ void MVKDevice::destroyPrivateDataSlot(VkPrivateDataSlot privateDataSlot,
 // the GPU might not be aware that the MTLBuffer needs to be made resident.
 // Track the buffer as needing to be made resident if a shader is bound that uses
 // PhysicalStorageBufferAddresses to access the contents of the underlying MTLBuffer.
+// The resource list is unordered. Each resource remembers its index in the list,
+// so it can be removed in constant time by moving the last resource into its slot.
+// Must be called with _rezLock held.
+void MVKDevice::addResource(MVKResource* rez) {
+	rez->_deviceResourceIndex = (uint32_t)_resources.size();
+	_resources.push_back(rez);
+}
+
+// Must be called with _rezLock held.
+void MVKDevice::removeResource(MVKResource* rez) {
+	uint32_t rezIdx = rez->_deviceResourceIndex;
+	if (rezIdx >= _resources.size() || _resources[rezIdx] != rez) { return; }
+	MVKResource* lastRez = _resources.back();
+	_resources[rezIdx] = lastRez;
+	lastRez->_deviceResourceIndex = rezIdx;
+	_resources.pop_back();
+	rez->_deviceResourceIndex = MVKResource::kNoDeviceResourceIndex;
+}
+
 MVKBuffer* MVKDevice::addBuffer(MVKBuffer* mvkBuff) {
 	if ( !mvkBuff ) { return mvkBuff; }
 
 	lock_guard<mutex> lock(_rezLock);
-	_resources.push_back(mvkBuff);
+	addResource(mvkBuff);
 	if (mvkIsAnyFlagEnabled(mvkBuff->getUsage(), VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT)) {
 		_gpuAddressableBuffers.push_back(mvkBuff);
 	}
@@ -4632,7 +4660,7 @@ MVKBuffer* MVKDevice::removeBuffer(MVKBuffer* mvkBuff) {
 	if ( !mvkBuff ) { return mvkBuff; }
 
 	lock_guard<mutex> lock(_rezLock);
-	mvkRemoveFirstOccurance(_resources, mvkBuff);
+	removeResource(mvkBuff);
 	if (mvkIsAnyFlagEnabled(mvkBuff->getUsage(), VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT)) {
 		mvkRemoveFirstOccurance(_gpuAddressableBuffers, mvkBuff);
 	}
@@ -4651,7 +4679,7 @@ MVKImage* MVKDevice::addImage(MVKImage* mvkImg) {
 
 	lock_guard<mutex> lock(_rezLock);
 	for (auto& mb : mvkImg->_memoryBindings) {
-		_resources.push_back(mb);
+		addResource(mb);
 	}
 	return mvkImg;
 }
@@ -4661,9 +4689,16 @@ MVKImage* MVKDevice::removeImage(MVKImage* mvkImg) {
 
 	lock_guard<mutex> lock(_rezLock);
 	for (auto& mb : mvkImg->_memoryBindings) {
-		mvkRemoveFirstOccurance(_resources, mb);
+		removeResource(mb);
 	}
 	return mvkImg;
+}
+
+MTLSharedEventListener* MVKDevice::getMTLSharedEventListener() {
+	std::call_once(_mtlSharedEventListenerOnce, [this]() {
+		_mtlSharedEventListener = [MTLSharedEventListener new];		// retained
+	});
+	return _mtlSharedEventListener;
 }
 
 void MVKDevice::addSemaphore(MVKSemaphoreImpl* sem4) {
@@ -4933,7 +4968,7 @@ void MVKDevice::returnVisibilityBuffer(MVKVisibilityBuffer&& buffer) {
 }
 
 id<MTLSamplerState> MVKDevice::getDefaultMTLSamplerState() {
-	if ( !_defaultMTLSamplerState ) {
+	if ( !_defaultMTLSamplerState ) [[unlikely]] {
 
 		// Lock and check again in case another thread has created the sampler.
 		lock_guard<mutex> lock(_rezLock);
@@ -5169,7 +5204,9 @@ static NSString *mvkBarrierStageName(MVKBarrierStage stage) {
 	}
 }
 
-MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo* pCreateInfo) : _enabledExtensions(this) {
+MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo* pCreateInfo) :
+	_pMVKConfig(&physicalDevice->getInstance()->getMVKConfig()),
+	_enabledExtensions(this) {
 
 	// If the physical device is lost, bail.
 	// Must have initialized everything accessed in destructor to null.
@@ -5191,8 +5228,9 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 		reportWarning(VK_ERROR_FEATURE_NOT_PRESENT, "Non-Apple GPUs do not fully support robustness.");
 	}
 
-	// Initialize fences for execution barriers
-	@autoreleasepool {
+	// Initialize fences for execution barriers. They are only used when encoding with
+	// Metal argument buffers and a residency set, so other devices do not create them.
+	if (_physicalDevice->isUsingMetalArgumentBuffers() && hasResidencySet()) @autoreleasepool {
 		for (int stage = 0; stage < kMVKBarrierStageCount; ++stage) {
 			for (int index = 0; index < kMVKBarrierFenceCount; ++index) {
 				auto &fence = _barrierFences[stage][index];
@@ -5590,6 +5628,7 @@ MVKDevice::~MVKDevice() {
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 
 	for (auto &fences: _barrierFences) for (auto fence: fences) [fence release];
+	[_mtlSharedEventListener release];
 
 #if MVK_XCODE_16
 	[_residencySet release];

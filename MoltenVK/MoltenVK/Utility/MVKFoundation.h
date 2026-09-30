@@ -29,25 +29,27 @@
 #include <limits>
 #include <span>
 #include <string>
+#include <string_view>
 #include <simd/simd.h>
 #include <type_traits>
+#include <os/lock.h>
 
 
 #pragma mark Math
 
 // Common scaling multipliers
-#define KIBI		(1024)
-#define MEBI		(KIBI * KIBI)
-#define GIBI        (KIBI * MEBI)
+inline constexpr uint32_t KIBI = 1024;
+inline constexpr uint32_t MEBI = KIBI * KIBI;
+inline constexpr uint32_t GIBI = KIBI * MEBI;
 
 /** Represents a non-existent index. */
-static const int kMVKIndexNone = -1;
+static constexpr int kMVKIndexNone = -1;
 
 /** A type definition for 16-bit half-float values. */
 typedef uint16_t MVKHalfFloat;
 
 /** A representation of the value of 1.0 as a 16-bit half-float. */
-#define kHalfFloat1	0x3C00
+inline constexpr MVKHalfFloat kHalfFloat1 = 0x3C00;
 
 /** Indicates that a function will not modify any global state (but may read passed pointers or mutable global variables). */
 #define GCC_PURE __attribute__((pure))
@@ -149,21 +151,20 @@ static inline std::string mvkGetVulkanVersionString(uint32_t vkVersion) {
 /** Returns whether the specified positive value is a power-of-two. */
 template<typename T>
 static constexpr bool mvkIsPowerOfTwo(T value) {
-	return value > 0 && ((value & (value - 1)) == 0);
+	return value > 0 && std::has_single_bit(static_cast<std::make_unsigned_t<T>>(value));
 }
 
 /**
  * Ensures the specified positive value is a power-of-two. Returns the specified value
  * if it is a power-of-two value. If it is not, returns the next power-of-two value
  * that is larger than the specified value is returned.
+ *
+ * This implementation returns one for inputs less than or equal to one.
  */
 template<typename T>
 static constexpr T mvkEnsurePowerOfTwo(T value) {
-	if (mvkIsPowerOfTwo(value)) { return value; }
-
-	T pot = 1;
-	while(pot <= value) { pot <<= 1; };
-	return pot;
+	if (value <= 1) { return 1; }
+	return static_cast<T>(std::bit_ceil(static_cast<std::make_unsigned_t<T>>(value)));
 }
 
 /**
@@ -174,17 +175,14 @@ static constexpr T mvkEnsurePowerOfTwo(T value) {
  */
 template<typename T>
 static constexpr T mvkPowerOfTwoExponent(T value) {
-    T p2Value = mvkEnsurePowerOfTwo(value);
-
-    // Count the trailing zeros
-    p2Value = (p2Value ^ (p2Value - 1)) >> 1;  // Set trailing 0s to 1s and zero rest
-    T potExp = 0;
-    while (p2Value) {
-        p2Value >>= 1;
-        potExp++;
-    }
-    return potExp;
+	if (value <= 1) { return 0; }
+	return static_cast<T>(std::bit_width(static_cast<std::make_unsigned_t<T>>(value - 1)));
 }
+
+static_assert(mvkEnsurePowerOfTwo(0) == 1 && mvkEnsurePowerOfTwo(1) == 1 && mvkEnsurePowerOfTwo(2) == 2 &&
+			  mvkEnsurePowerOfTwo(3) == 4 && mvkEnsurePowerOfTwo(4) == 4 && mvkEnsurePowerOfTwo(1025u) == 2048u);
+static_assert(mvkPowerOfTwoExponent(0) == 0 && mvkPowerOfTwoExponent(1) == 0 && mvkPowerOfTwoExponent(2) == 1 &&
+			  mvkPowerOfTwoExponent(3) == 2 && mvkPowerOfTwoExponent(4) == 2 && mvkPowerOfTwoExponent(1025u) == 11u);
 
 /**
  * Aligns the byte reference to the specified alignment, and returns the aligned value,
@@ -228,41 +226,16 @@ static constexpr uint64_t mvkAlignByteCount(uint64_t byteCount, uint64_t byteAli
 }
 
 /**
- * Compile time indication if the struct contains a specific member.
- *
- * If S::mbr is well-formed because the struct contains that member, the decltype() and
- * comma operator together trigger a true_type, otherwise it falls back to a false_type.
- *
- * Credit to: https://fekir.info/post/detect-member-variables/
- */
-#define mvk_define_has_member(mbr) \
-	template <typename T, typename = void> struct mvk_has_##mbr : std::false_type {}; \
-	template <typename T> struct mvk_has_##mbr<T, decltype((void)T::mbr, void())> : std::true_type {};
-
-mvk_define_has_member(pNext);	// Defines the mvk_has_pNext() function.
-
-/** Returns the address of the first member of a structure, which is just the address of the structure. */
-template <typename S>
-void* mvkGetAddressOfFirstMember(const S* pStruct, std::false_type){
-	return (void*)pStruct;
-}
-
-/**
- * Returns the address of the first member of a Vulkan structure containing a pNext member.
- * The first member is the one after the pNext member.
- */
-template <class S>
-void* mvkGetAddressOfFirstMember(const S* pStruct, std::true_type){
-	return (void*)(&(pStruct->pNext) + 1);
-}
-
-/**
  * Returns the address of the first member of a structure. If the structure is a Vulkan
  * structure containing a pNext member, the first member is the one after the pNext member.
  */
 template <class S>
-void* mvkGetAddressOfFirstMember(const S* pStruct){
-	return mvkGetAddressOfFirstMember(pStruct, mvk_has_pNext<S>{});
+void* mvkGetAddressOfFirstMember(const S* pStruct) {
+	if constexpr (requires { pStruct->pNext; }) {
+		return (void*)(&(pStruct->pNext) + 1);
+	} else {
+		return (void*)pStruct;
+	}
 }
 
 /**
@@ -365,12 +338,10 @@ static constexpr bool mvkVkOffset3DsAreEqual(VkOffset3D os1, VkOffset3D os2) {
  * Returns the difference between two offsets, by subtracting the subtrahend from the minuend,
  * which is accomplished by subtracting each of the corresponding x,y,z components.
  */
-static inline VkOffset3D mvkVkOffset3DDifference(VkOffset3D minuend, VkOffset3D subtrahend) {
-	VkOffset3D rslt;
-	rslt.x = minuend.x - subtrahend.x;
-	rslt.y = minuend.y - subtrahend.y;
-	rslt.z = minuend.z - subtrahend.z;
-	return rslt;
+static constexpr VkOffset3D mvkVkOffset3DDifference(VkOffset3D minuend, VkOffset3D subtrahend) {
+	return { .x = minuend.x - subtrahend.x,
+			 .y = minuend.y - subtrahend.y,
+			 .z = minuend.z - subtrahend.z };
 }
 
 /** Packs the four swizzle components into a single 32-bit word. */
@@ -438,40 +409,33 @@ static constexpr bool mvkFits(const Tval& val) {
 }
 
 /** Clamps the value between the lower and upper bounds, inclusive. */
+/** Returns a copy, so the result never refers to a temporary argument. Unlike std::clamp(), lower may exceed upper. */
 template<typename T>
-static constexpr const T& mvkClamp(const T& val, const T& lower, const T& upper) {
+static constexpr T mvkClamp(const T& val, const T& lower, const T& upper) {
     return std::min(std::max(val, lower), upper);
 }
 
 /** Returns the result of a division, rounded up. */
 template<typename T, typename U>
-static constexpr typename std::common_type<T, U>::type mvkCeilingDivide(T numerator, U denominator) {
-	typedef typename std::common_type<T, U>::type R;
+static constexpr std::common_type_t<T, U> mvkCeilingDivide(T numerator, U denominator) {
+	using R = std::common_type_t<T, U>;
 	// Short circuit very common usecase of dividing by one.
 	return (denominator == 1) ? numerator : (R(numerator) + denominator - 1) / denominator;
 }
 
-/** Returns the absolute value of a number. */
-template<typename R, typename T, bool = std::is_signed<T>::value>
-struct MVKAbs;
-
+/** Returns the absolute value of a number, as type R. The minimum signed value is negated in type R, to avoid overflow in type T. */
 template<typename R, typename T>
-struct MVKAbs<R, T, true> {
-	static constexpr R eval(T x) noexcept {
+static constexpr R mvkAbs(T x) noexcept {
+	if constexpr (std::is_signed_v<T>) {
 		return x >= 0 ? x : (x == std::numeric_limits<T>::min() ? -static_cast<R>(x) : -x);
-	}
-};
-
-template<typename R, typename T>
-struct MVKAbs<R, T, false> {
-	static constexpr R eval(T x) noexcept {
+	} else {
 		return x;
 	}
-};
+}
 
 /** Returns the absolute value of the difference of two numbers. */
 template<typename T, typename U>
-static constexpr typename std::common_type<T, U>::type mvkAbsDiff(T x, U y) {
+static constexpr std::common_type_t<T, U> mvkAbsDiff(T x, U y) {
 	return x >= y ? x - y : y - x;
 }
 
@@ -482,18 +446,39 @@ static constexpr T mvkGreatestCommonDivisorImpl(T a, T b) {
 }
 
 template<typename T, typename U>
-static constexpr typename std::common_type<T, U>::type mvkGreatestCommonDivisor(T a, U b) {
-	typedef typename std::common_type<T, U>::type R;
-	typedef typename std::make_unsigned<R>::type UI;
-	return static_cast<R>(mvkGreatestCommonDivisorImpl(static_cast<UI>(MVKAbs<R, T>::eval(a)), static_cast<UI>(MVKAbs<R, U>::eval(b))));
+static constexpr std::common_type_t<T, U> mvkGreatestCommonDivisor(T a, U b) {
+	using R = std::common_type_t<T, U>;
+	using UI = std::make_unsigned_t<R>;
+	return static_cast<R>(mvkGreatestCommonDivisorImpl(static_cast<UI>(mvkAbs<R>(a)), static_cast<UI>(mvkAbs<R>(b))));
 }
 
 /** Returns the least common multiple of two numbers. */
 template<typename T, typename U>
-static constexpr typename std::common_type<T, U>::type mvkLeastCommonMultiple(T a, U b) {
-	typedef typename std::common_type<T, U>::type R;
-	return (a == 0 && b == 0) ? 0 : MVKAbs<R, T>::eval(a) / mvkGreatestCommonDivisor(a, b) * MVKAbs<R, U>::eval(b);
+static constexpr std::common_type_t<T, U> mvkLeastCommonMultiple(T a, U b) {
+	using R = std::common_type_t<T, U>;
+	return (a == 0 && b == 0) ? 0 : mvkAbs<R>(a) / mvkGreatestCommonDivisor(a, b) * mvkAbs<R>(b);
 }
+
+
+#pragma mark Locking
+
+/**
+ * A small, non-recursive lock that satisfies the BasicLockable requirements, so it can be
+ * used with std::lock_guard. It wraps os_unfair_lock, which is 4 bytes, where std::mutex is
+ * 64 bytes on Darwin. Use it for locks embedded in objects that are created in large numbers,
+ * and that never wait on a condition variable or lock recursively.
+ */
+class MVKUnfairLock {
+public:
+	MVKUnfairLock() = default;
+	MVKUnfairLock(const MVKUnfairLock&) = delete;
+	MVKUnfairLock& operator=(const MVKUnfairLock&) = delete;
+	void lock() { os_unfair_lock_lock(&_lock); }
+	void unlock() { os_unfair_lock_unlock(&_lock); }
+	bool try_lock() { return os_unfair_lock_trylock(&_lock); }
+private:
+	os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;
+};
 
 
 #pragma mark Hashing
@@ -618,8 +603,9 @@ static constexpr const T& mvkSelectPlatformValue(const T& macOSVal, const T& iOS
  */
 template<typename T>
 static void mvkClear(T* pDst, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkClear() writes bytes, so it requires a trivially copyable type.");
 	if ( !pDst ) { return; }					// Bad pointer
-	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); } }  // Fast clear of a single primitive
+	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); return; } }  // Fast clear of a single primitive
 	memset(pDst, 0, sizeof(T) * count);			// Memory clear of complex content or array
 }
 
@@ -637,6 +623,7 @@ static void mvkClear(const T* pVal, size_t count = 1) { mvkClear((T*)pVal, count
  */
 template<typename T>
 static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
+	static_assert(std::is_void_v<T> || std::is_trivially_copyable_v<T>, "mvkCopy() copies bytes, so it requires a trivially copyable type.");
 	if ( !pDst || !pSrc ) { return; }				// Bad pointers
 	if (pDst == pSrc) { return; }					// Same object
 
@@ -658,6 +645,7 @@ static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
  */
 template<typename T>
 static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkAreEqual() compares bytes, so it requires a trivially copyable type.");
 	if (count == 0) { return true; }					// Empty ranges are equal, even with null pointers (e.g. an empty MVKArrayRef)
 	if ( !pV1 || !pV2 ) { return false; }				// Bad pointers
 	if (pV1 == pV2) { return true; }					// Same object
@@ -672,7 +660,7 @@ static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) 
  * Returns false if either string is null.
  */
 static constexpr bool mvkStringsAreEqual(const char* pV1, const char* pV2) {
-	return pV1 && pV2 && (pV1 == pV2 || strcmp(pV1, pV2) == 0);
+	return pV1 && pV2 && (pV1 == pV2 || std::string_view(pV1) == std::string_view(pV2));
 }
 
 /**
@@ -702,19 +690,19 @@ static constexpr bool mvkSetOrClear(T* pDest, const T* pSrc) {
 
 /** Enables the flags (sets bits to 1) within the value parameter specified by the bitMask parameter. */
 template<typename Tv, typename Tm>
-void mvkEnableFlags(Tv& value, const Tm bitMask) { value = (Tv)(value | bitMask); }
+constexpr void mvkEnableFlags(Tv& value, const Tm bitMask) { value = (Tv)(value | bitMask); }
 
 /** Enables all the flags (sets bits to 1) within the value parameter. */
 template<typename Tv>
-void mvkEnableAllFlags(Tv& value) { value = ~static_cast<Tv>(0); }
+constexpr void mvkEnableAllFlags(Tv& value) { value = ~static_cast<Tv>(0); }
 
 /** Disables the flags (sets bits to 0) within the value parameter specified by the bitMask parameter. */
 template<typename Tv, typename Tm>
-void mvkDisableFlags(Tv& value, const Tm bitMask) { value = (Tv)(value & ~(Tv)bitMask); }
+constexpr void mvkDisableFlags(Tv& value, const Tm bitMask) { value = (Tv)(value & ~(Tv)bitMask); }
 
 /** Enables all the flags (sets bits to 1) within the value parameter. */
 template<typename Tv>
-void mvkDisableAllFlags(Tv& value) { value = static_cast<Tv>(0); }
+constexpr void mvkDisableAllFlags(Tv& value) { value = static_cast<Tv>(0); }
 
 /** Returns whether the specified value has ANY of the flags specified in bitMask enabled (set to 1). */
 template<typename Tv, typename Tm>
@@ -819,8 +807,8 @@ struct MVKOnePerEnumEntry {
 	constexpr       Element& operator[](Enum idx)       { return elements[static_cast<std::size_t>(idx)]; }
 	constexpr const Element& operator[](Enum idx) const { return elements[static_cast<std::size_t>(idx)]; }
 
-	      Element* begin()       { return std::begin(elements); }
-	const Element* begin() const { return std::begin(elements); }
-	      Element* end()         { return std::end(elements); }
-	const Element* end()   const { return std::end(elements); }
+	constexpr       Element* begin()       { return std::begin(elements); }
+	constexpr const Element* begin() const { return std::begin(elements); }
+	constexpr       Element* end()         { return std::end(elements); }
+	constexpr const Element* end()   const { return std::end(elements); }
 };

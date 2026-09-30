@@ -26,7 +26,8 @@
 #include "MTLRenderPipelineDescriptor+MoltenVK.h"
 #include "mvk_datatypes.hpp"
 #include <sys/stat.h>
-#include <sstream>
+#include <istream>
+#include <ostream>
 
 #ifndef MVK_USE_CEREAL
 #define MVK_USE_CEREAL (1)
@@ -64,7 +65,7 @@ static MVKDescriptorGPULayout getBindingLayout(const MVKDescriptorBinding& bindi
 	}
 }
 
-static spv::ExecutionModel spvExecModelForStage(MVKShaderStage stage) {
+static constexpr spv::ExecutionModel spvExecModelForStage(MVKShaderStage stage) {
 	switch (stage) {
 		case kMVKShaderStageVertex:   return spv::ExecutionModelVertex;
 		case kMVKShaderStageTessCtl:  return spv::ExecutionModelTessellationControl;
@@ -217,7 +218,7 @@ void MVKPipelineLayout::populateShaderConversionConfig(SPIRVToMSLConversionConfi
 	}
 }
 
-static bool hasDynamicBuffer(VkDescriptorType type) {
+static constexpr bool hasDynamicBuffer(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
 		case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
@@ -227,7 +228,7 @@ static bool hasDynamicBuffer(VkDescriptorType type) {
 	}
 }
 
-static bool hasBuffer(MVKDescriptorGPULayout layout) {
+static constexpr bool hasBuffer(MVKDescriptorGPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorGPULayout::Buffer:
 		case MVKDescriptorGPULayout::BufferAuxSize:
@@ -238,7 +239,7 @@ static bool hasBuffer(MVKDescriptorGPULayout layout) {
 	}
 }
 
-static bool isWriteable(VkDescriptorType type) {
+static constexpr bool isWriteable(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
 		case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
@@ -412,10 +413,9 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 		layout->retain();
 
-		// Establish descriptor counts and push constants use.
+		// Establish descriptor counts.
 		for (uint32_t stage = kMVKShaderStageVertex; stage < kMVKShaderStageCount; stage++) {
 			_descriptorBufferCounts.stages[stage] = layout->getResourceCounts().stages[stage].bufferIndex;
-			_stageUsesPushConstants[stage] = layout->stageUsesPushConstants((MVKShaderStage)stage);
 		}
 	}
 
@@ -497,12 +497,10 @@ void MVKGraphicsPipeline::wasBound(MVKCommandEncoder* cmdEncoder) {
 	}
 }
 
-void MVKGraphicsPipeline::getStages(MVKPiplineStages& stages) {
-    if (isTessellationPipeline()) {
-        stages.push_back(kMVKGraphicsStageVertex);
-        stages.push_back(kMVKGraphicsStageTessControl);
-    }
-    stages.push_back(kMVKGraphicsStageRasterization);
+// Returns a view of a constant stage sequence, so that draws pay nothing to retrieve it.
+MVKPiplineStages MVKGraphicsPipeline::getStages() const {
+	static constexpr MVKGraphicsStage kAllStages[] = { kMVKGraphicsStageVertex, kMVKGraphicsStageTessControl, kMVKGraphicsStageRasterization };
+	return _isTessellationPipeline ? MVKPiplineStages(kAllStages, 3) : MVKPiplineStages(kAllStages + 2, 1);
 }
 
 static const char vtxCompilerType[] = "Vertex stage pipeline for tessellation";
@@ -676,7 +674,7 @@ static void loadStencil(MVKMTLStencilDescriptorData& mtl, const VkStencilOpState
 	mtl.op.depthStencilPassOperation = mvkMTLStencilOperationFromVkStencilOp(vk.passOp);
 }
 
-static bool usesConstantColor(VkBlendFactor factor) {
+static constexpr bool usesConstantColor(VkBlendFactor factor) {
 	switch (factor) {
 		case VK_BLEND_FACTOR_CONSTANT_COLOR:
 		case VK_BLEND_FACTOR_CONSTANT_ALPHA:
@@ -1227,9 +1225,9 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessVertexStageDescript
 
 	// Filter out anything but builtins. We couldn't do this before because we needed to make sure
 	// locations were assigned correctly.
-	tcInputs.erase(std::remove_if(tcInputs.begin(), tcInputs.end(), [](const SPIRVShaderInterfaceVariable& var) {
+	erase_if(tcInputs, [](const SPIRVShaderInterfaceVariable& var) {
 		return var.builtin != spv::BuiltInPosition && var.builtin != spv::BuiltInPointSize && var.builtin != spv::BuiltInClipDistance && var.builtin != spv::BuiltInCullDistance;
-	}), tcInputs.end());
+	});
 
 	// Add shader stages.
 	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, tcInputs, pVertexSS, pVertexFB, pVtxFunctions)) { return nil; }
@@ -1319,9 +1317,9 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessControlStageDescrip
 
 	// Filter out anything but builtins. We couldn't do this before because we needed to make sure
 	// locations were assigned correctly.
-	teInputs.erase(std::remove_if(teInputs.begin(), teInputs.end(), [](const SPIRVShaderInterfaceVariable& var) {
+	erase_if(teInputs, [](const SPIRVShaderInterfaceVariable& var) {
 		return var.builtin != spv::BuiltInPosition && var.builtin != spv::BuiltInPointSize && var.builtin != spv::BuiltInClipDistance && var.builtin != spv::BuiltInCullDistance;
-	}), teInputs.end());
+	});
 
 	// Add shader stages.
 	if (!addTessCtlShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, teInputs, pTessCtlSS, pTessCtlFB)) {
@@ -1507,9 +1505,9 @@ bool MVKGraphicsPipeline::addVertexShaderToPipeline(MTLComputePipelineDescriptor
 		func = getMTLFunction(shaderConfig, pVertexSS, pVertexFB, _vertexModule, "Vertex");
 		if ( !func.getMTLFunction() ) { return false; }
 
-		pVtxFunctions[i] = func;
+		pVtxFunctions[i] = std::move(func);
 
-		auto& funcRslts = func.shaderConversionResults;
+		auto& funcRslts = pVtxFunctions[i].shaderConversionResults;
 		populateResourceUsage(_stageResources[kMVKShaderStageVertex], shaderConfig, funcRslts, spv::ExecutionModelVertex);
 	}
 
@@ -2149,6 +2147,7 @@ void MVKGraphicsPipeline::addVertexInputToShaderConversionConfig(SPIRVToMSLConve
     // Set the shader conversion config vertex attribute information
     shaderConfig.shaderInputs.clear();
     uint32_t vaCnt = pCreateInfo->pVertexInputState->vertexAttributeDescriptionCount;
+    shaderConfig.shaderInputs.reserve(vaCnt);
     for (uint32_t vaIdx = 0; vaIdx < vaCnt; vaIdx++) {
         const VkVertexInputAttributeDescription* pVKVA = &pCreateInfo->pVertexInputState->pVertexAttributeDescriptions[vaIdx];
 
@@ -2503,12 +2502,9 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 
 // Returns a shader library cache for the specified shader module key, creating it if necessary.
 MVKShaderLibraryCache* MVKPipelineCache::getShaderLibraryCache(MVKShaderModuleKey smKey) {
-	MVKShaderLibraryCache* slCache = _shaderCache[smKey];
-	if ( !slCache ) {
-		slCache = new MVKShaderLibraryCache(this);
-		_shaderCache[smKey] = slCache;
-	}
-	return slCache;
+	auto [iter, wasInserted] = _shaderCache.try_emplace(smKey, nullptr);
+	if (wasInserted) { iter->second = new MVKShaderLibraryCache(this); }
+	return iter->second;
 }
 
 
@@ -2548,7 +2544,6 @@ protected:
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
 
 	MVKShaderLibraryCache* _pSLCache;
-	size_t _count = 0;
 	int32_t _index = -1;
 };
 
@@ -2704,7 +2699,7 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					// Add the shader library to the staging cache. The MTLLibrary is compiled
 					// on first use, so creating the cache does not compile every entry up front.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL, true);
+					slCache->addShaderLibrary(std::move(shaderConversionConfig), std::move(resultInfo), std::move(compressedMSL), true);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
 
 					break;

@@ -21,7 +21,6 @@
 #include "MVKCommandResourceFactory.h"
 #include "MVKMTLBufferAllocation.h"
 #include <unordered_map>
-#include <mutex>
 
 #import <Metal/Metal.h>
 
@@ -155,7 +154,7 @@ protected:
 	void destroyMetalResources();
 
 	MVKCommandPool* _commandPool;
-	std::mutex _lock;
+	MVKUnfairLock _lock;
     std::unordered_map<MVKRPSKeyBlitImg, id<MTLRenderPipelineState>> _cmdBlitImageMTLRenderPipelineStates;
 	std::unordered_map<MVKRPSKeyClearAtt, id<MTLRenderPipelineState>> _cmdClearMTLRenderPipelineStates;
     std::unordered_map<MVKMTLDepthStencilDescriptorData, id<MTLDepthStencilState>> _mtlDepthStencilStates;

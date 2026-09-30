@@ -78,10 +78,10 @@ typedef MVKCmdCopyImage<4> MVKCmdCopyImageMulti;
 #define kMVKBlitVertexCount		4
 
 /** Combines a VkImageBlit with vertices to render it. */
-typedef struct {
+struct MVKImageBlitRender {
 	VkImageBlit2 region;
 	MVKVertexPosTex vertices[kMVKBlitVertexCount];
-} MVKImageBlitRender;
+};
 
 /**
  * Vulkan command to BLIT image regions.
@@ -130,10 +130,10 @@ typedef MVKCmdBlitImage<4> MVKCmdBlitImageMulti;
 #pragma mark MVKCmdResolveImage
 
 /** Describes Metal texture resolve parameters. */
-typedef struct {
+struct MVKMetalResolveSlice {
     VkImageSubresourceLayers srcSubresource;
     VkImageSubresourceLayers dstSubresource;
-} MVKMetalResolveSlice;
+};
 
 /**
  * Vulkan command to resolve image regions.
@@ -445,5 +445,4 @@ protected:
 	MVKSmallVector<uint8_t> _srcDataCache;
 	MVKBuffer* _dstBuffer;
     VkDeviceSize _dstOffset;
-    VkDeviceSize _dataSize;
 };

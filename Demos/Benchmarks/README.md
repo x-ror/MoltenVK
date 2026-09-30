@@ -147,6 +147,24 @@ The script looks for Metal's shader cache for `mvkbench` under `$(getconf DARWIN
 If it does not find it, it skips the `nosys` phase and says so. Set `METAL_CACHE_DIRS` to the
 directories to delete in that case.
 
+## Verifying the performance review stages
+
+`verify_review_stages.sh` runs the checks that section 9 of `Docs/Performance_Review.md` calls
+for, on every commit of the review branch. It builds each commit in its own worktree, with one
+shared `External` directory. It then runs `run_benchmarks.sh` with `all`, and
+`launch_benchmarks.sh`, against all the builds. With `--cts`, it also runs a CTS case list
+against each build with `Scripts/runcts`, and lists the tests that fail at a stage but passed
+at the stage before it:
+
+```
+caffeinate -is ./verify_review_stages.sh --cts ../../../VK-GL-CTS/build/external/vulkancts/modules/vulkan/Release
+```
+
+The default case list, `review_cts_caselist.txt`, covers the areas the review changed. Pass the
+CTS mustpass list with `--caselist` for the full run that section 4 asks for. To compare fewer
+stages, pass them as `LABEL=REVISION`, for example `base=d84f1a3 head=HEAD`. Use `--dry-run` to
+see the commands first.
+
 ## Getting reliable numbers
 
 - Start with an A/A run: pass the same library twice under two labels. Every row should read

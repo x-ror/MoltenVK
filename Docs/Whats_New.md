@@ -36,6 +36,28 @@ Released TBD
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 - Fix a crash, or push descriptors not being written, when the `VkDescriptorUpdateTemplate` of `vkCmdPushDescriptorSetWithTemplate()` is destroyed before the command buffer is submitted.
 - Pass the draw index to shaders that read `gl_DrawID` inline on direct draws, and return temporary `MTLBuffer` allocations to their pools with one completion handler per Metal command buffer.
+- Fix a self-deadlock in `MVKQueryPool` when a deferred `vkCmdCopyQueryPoolResults()` with `VK_QUERY_RESULT_WAIT_BIT` is encoded by a compute copy.
+- Fix unlocked insertion into the per-command-pool Metal resource maps, the per-image texture view map, and the shared pixel format tables when looking up an entry that does not exist.
+- Fix thread-unsafe one-time initialization of the global configuration, the platform pixel formats, the OS version, and the layer manager.
+- Fix `MVKSmallVector` copy assignment not compiling, reverse iteration over pointer vectors being empty, and mark its move operations `noexcept`.
+- Fix `vkCmdBeginRenderPass()` with two clear values being recorded into the wrong command pool.
+- Fix an uninitialized descriptor pool free-list size, a missing `break` when reading `VkExportMetalObjectCreateInfoEXT` during memory allocation, stale `pNext` pointers kept in recorded dynamic rendering attachments, a leaked Metal command buffer label per queue, and a missing `default` in `mvkMTLIndexTypeSizeInBytes()`.
+- Cache the MoltenVK configuration on `VkDevice` objects, so reading it on the draw and submit paths no longer walks a chain of virtual calls.
+- Remove buffers and images from the device resource list in constant time, share one `MTLSharedEventListener` per device for host waits on timeline semaphores, and cut per-submit allocations and locking in `vkQueueSubmit()` and `vkQueueWaitIdle()`.
+- Look up `vkGetInstanceProcAddr()` and `vkGetDeviceProcAddr()` names without allocating, and build the entry point table once per process with extension names resolved to indexes.
+- Use C++20 `<bit>` operations for power-of-two, mipmap level, and multiview view-mask computations, and avoid per-draw work when retrieving pipeline stages, binding descriptor sets, and tracing Vulkan calls when tracing is off.
+- Reduce pipeline creation and `VkPipelineCache` loading costs: copy the shader conversion configuration only on a cache miss, move cache entries into place instead of copying them, compare configurations index-aligned before scanning, index Metal function constants once per library, and skip macro specialization for shaders that use none.
+- Reduce memory per `VkCommandPool` by creating temporary `MTLBuffer` pools on first use and removing unused locks from command pools, and per buffer, image, view and device memory by using a 4-byte lock in place of `std::mutex`.
+- Create the barrier `MTLFence` objects of a device only when they can be used, read environment variables without building a dictionary per lookup, and replace variable-length stack arrays in transfer commands and device queries with small vectors.
+- Copy push descriptor writes into one block of storage reused across recordings, and fix the data of an inline uniform block pushed with `vkCmdPushDescriptorSet()` not being copied at record time.
+- Make `MVKSmallVector` iterators plain pointers, move and copy trivially copyable elements as blocks of bytes, and fix erasing an empty range from the middle of an `MVKSmallVector` moving the following elements onto themselves.
+- Add move operations to `MVKBitArray`, and require trivially copyable types in `mvkClear()`, `mvkCopy()` and `mvkAreEqual()`.
+- Adopt C++20 features across the codebase: defaulted comparisons, `using enum`, designated initializers, concepts and `requires` expressions in place of SFINAE and tag dispatch, `constexpr` helpers and constants, `[[likely]]` and `[[unlikely]]` on fast paths, and array views in place of pointer and count pairs.
+- Remove unused members and helpers, initialize command encoder members at their declarations, share the tessellation draw encoding between direct and indexed draws, sort descriptor set layout bindings without a search for their immutable samplers, and copy trivially copyable ranges into an `MVKSmallVector` as one block.
+- Copy unaligned `vkCmdCopyBuffer()` regions with one GPU thread per byte instead of one thread for the whole region, and clear and resolve each layer of an array image in parallel in the compute fallbacks.
+- Build extension lists in linear time, checking each extension's minimum OS version directly.
+- Fix `MVKConfigMembers.def` member types that differed from `MVKConfiguration`.
+- Fix `mvk::trim()` leaving trailing whitespace when the string also has leading whitespace, and undefined behavior writing UUID bytes and classifying non-ASCII characters.
 
 
 

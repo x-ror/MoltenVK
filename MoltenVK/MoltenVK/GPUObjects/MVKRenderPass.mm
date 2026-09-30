@@ -163,6 +163,11 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 													   bool loadOverride) {
 	MVKPixelFormats* pixFmts = _renderPass->getPixelFormats();
 
+	// In a multiview render pass, the starting layer of every attachment is offset by the
+	// first view rendered in this Metal pass, so that only the enabled views are loaded.
+	const bool isMultiviewPass = isMultiview();
+	const uint32_t startView = isMultiviewPass ? getFirstViewIndexInMetalPass(passIdx) : 0;
+
 	// Populate the Metal color attachments
 	uint32_t caCnt = getColorAttachmentCount();
 	uint32_t caUsedCnt = 0;
@@ -183,10 +188,7 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 				if (canResolveFormat) {
 					raImgView->populateMTLRenderPassAttachmentDescriptorResolve(mtlColorAttDesc);
 
-					// In a multiview render pass, we need to override the starting layer to ensure
-					// only the enabled views are loaded.
-					if (isMultiview()) {
-						uint32_t startView = getFirstViewIndexInMetalPass(passIdx);
+					if (isMultiviewPass) {
 						if (mtlColorAttDesc.resolveTexture.textureType == MTLTextureType3D)
 							mtlColorAttDesc.resolveDepthPlane += startView;
 						else
@@ -203,8 +205,7 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 																	   false, loadOverride)) {
 				mtlColorAttDesc.clearColor = pixFmts->getMTLClearColor(clearValues[clrRPAttIdx].color, clrMVKRPAtt->getFormat());
 			}
-			if (isMultiview()) {
-				uint32_t startView = getFirstViewIndexInMetalPass(passIdx);
+			if (isMultiviewPass) {
 				if (mtlColorAttDesc.texture.textureType == MTLTextureType3D)
 					mtlColorAttDesc.depthPlane += startView;
 				else
@@ -230,8 +231,8 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 		if (hasDepthResolve) {
 			depthRslvImage->populateMTLRenderPassAttachmentDescriptorResolve(mtlDepthAttDesc);
 			mtlDepthAttDesc.depthResolveFilter = mvkMTLMultisampleDepthResolveFilterFromVkResolveModeFlagBits(_depthResolveMode);
-			if (isMultiview()) {
-				mtlDepthAttDesc.resolveSlice += getFirstViewIndexInMetalPass(passIdx);
+			if (isMultiviewPass) {
+				mtlDepthAttDesc.resolveSlice += startView;
 			}
 		}
 		if (depthMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(mtlDepthAttDesc, this, depthImage,
@@ -240,8 +241,8 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 																	 false, loadOverride)) {
 			mtlDepthAttDesc.clearDepth = pixFmts->getMTLClearDepthValue(clearValues[depthRPAttIdx].depthStencil);
 		}
-		if (isMultiview()) {
-			mtlDepthAttDesc.slice += getFirstViewIndexInMetalPass(passIdx);
+		if (isMultiviewPass) {
+			mtlDepthAttDesc.slice += startView;
 		}
 	}
 
@@ -262,8 +263,8 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 		if (hasStencilResolve) {
 			stencilRslvImage->populateMTLRenderPassAttachmentDescriptorResolve(mtlStencilAttDesc);
 			mtlStencilAttDesc.stencilResolveFilter = mvkMTLMultisampleStencilResolveFilterFromVkResolveModeFlagBits(_stencilResolveMode);
-			if (isMultiview()) {
-				mtlStencilAttDesc.resolveSlice += getFirstViewIndexInMetalPass(passIdx);
+			if (isMultiviewPass) {
+				mtlStencilAttDesc.resolveSlice += startView;
 			}
 		}
 		if (stencilMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(mtlStencilAttDesc, this, stencilImage,
@@ -272,8 +273,8 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 																	   true, loadOverride)) {
 			mtlStencilAttDesc.clearStencil = pixFmts->getMTLClearStencilValue(clearValues[stencilRPAttIdx].depthStencil);
 		}
-		if (isMultiview()) {
-			mtlStencilAttDesc.slice += getFirstViewIndexInMetalPass(passIdx);
+		if (isMultiviewPass) {
+			mtlStencilAttDesc.slice += startView;
 		}
 	}
 
@@ -427,9 +428,11 @@ void MVKRenderSubpass::resolveUnresolvableAttachments(MVKCommandEncoder* cmdEnco
 				id<MTLComputeCommandEncoder> mtlComputeEnc = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseResolveSubpassAttachment);
 				MVKMetalComputeCommandEncoderState& state = cmdEncoder->getMtlCompute();
 				state.bindPipeline(mtlComputeEnc, mtlRslvState);
+				id<MTLTexture> srcMTLTex = caImgView->getMTLTexture();
 				state.bindTexture(mtlComputeEnc, raImgView->getMTLTexture(), 0);
-				state.bindTexture(mtlComputeEnc, caImgView->getMTLTexture(), 1);
+				state.bindTexture(mtlComputeEnc, srcMTLTex, 1);
 				MTLSize gridSize = mvkMTLSizeFromVkExtent3D(raImgView->getExtent3D());
+				if (isTextureArray) { gridSize.depth = srcMTLTex.arrayLength; }	// One slice per grid layer.
 				MTLSize tgSize = MTLSizeMake(mtlRslvState.threadExecutionWidth, 1, 1);
 				if (cmdEncoder->getMetalFeatures().nonUniformThreadgroups) {
 					[mtlComputeEnc dispatchThreads: gridSize threadsPerThreadgroup: tgSize];
@@ -1187,31 +1190,6 @@ void MVKRenderPass::linkAttachments() {
 
 
 #pragma mark -
-#pragma mark MVKRenderingAttachmentIterator
-
-void MVKRenderingAttachmentIterator::iterate(MVKRenderingAttachmentInfoOperation attOperation) {
-	for (uint32_t caIdx = 0; caIdx < _renderingInfo.colorAttachmentCount; caIdx++) {
-		handleAttachment(&_renderingInfo.pColorAttachments[caIdx], VK_IMAGE_ASPECT_COLOR_BIT, attOperation);
-	}
-	handleAttachment(_renderingInfo.pDepthAttachment, VK_IMAGE_ASPECT_DEPTH_BIT, attOperation);
-	handleAttachment(_renderingInfo.pStencilAttachment, VK_IMAGE_ASPECT_STENCIL_BIT, attOperation);
-}
-
-void MVKRenderingAttachmentIterator::handleAttachment(const VkRenderingAttachmentInfo* pAttInfo,
-													  VkImageAspectFlagBits aspect,
-													  MVKRenderingAttachmentInfoOperation attOperation) {
-	if (pAttInfo) {
-		attOperation(pAttInfo, aspect, (MVKImageView*)pAttInfo->imageView, false);
-		attOperation(pAttInfo, aspect, (MVKImageView*)pAttInfo->resolveImageView, true);
-	}
-}
-
-MVKRenderingAttachmentIterator::MVKRenderingAttachmentIterator(const VkRenderingInfo* pRenderingInfo) {
-	_renderingInfo = *pRenderingInfo;
-}
-
-
-#pragma mark -
 #pragma mark Support functions
 
 bool mvkIsColorAttachmentUsed(const VkPipelineRenderingCreateInfo* pRendInfo, uint32_t colorAttIdx) {
@@ -1228,20 +1206,19 @@ bool mvkHasColorAttachments(const VkPipelineRenderingCreateInfo* pRendInfo) {
 }
 
 uint32_t mvkGetNextViewMaskGroup(uint32_t viewMask, uint32_t* startView, uint32_t* viewCount, uint32_t *groupMask) {
-	// First, find the first set bit. This is the start of the next clump of views to be rendered.
-	// n.b. ffs(3) returns a 1-based index. This actually bit me during development of this feature.
-	int pos = ffs(viewMask) - 1;
-	int end = pos;
-	if (groupMask) { *groupMask = 0; }
-	// Now we'll step through the bits one at a time until we find a bit that isn't set.
-	// This is one past the end of the next clump. Clear the bits as we go, so we can use
-	// ffs(3) again on the next clump.
-	// TODO: Find a way to make this faster.
-	while (viewMask & (1 << end)) {
-		if (groupMask) { *groupMask |= viewMask & (1 << end); }
-		viewMask &= ~(1 << (end++));
+	if (viewMask == 0) {
+		if (startView) { *startView = 0; }
+		if (viewCount) { *viewCount = 0; }
+		if (groupMask) { *groupMask = 0; }
+		return 0;
 	}
+	// The next clump of views to be rendered starts at the first set bit,
+	// and extends over the run of consecutive set bits that follows it.
+	uint32_t pos = std::countr_zero(viewMask);
+	uint32_t cnt = std::countr_one(viewMask >> pos);
+	uint32_t group = (cnt >= 32 ? ~0u : ((1u << cnt) - 1u)) << pos;
 	if (startView) { *startView = pos; }
-	if (viewCount) { *viewCount = end - pos; }
-	return viewMask;
+	if (viewCount) { *viewCount = cnt; }
+	if (groupMask) { *groupMask = group; }
+	return viewMask & ~group;
 }

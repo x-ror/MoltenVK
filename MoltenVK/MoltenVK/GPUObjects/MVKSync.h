@@ -22,7 +22,6 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
-#include <unordered_set>
 
 class MVKFenceSitter;
 
@@ -341,8 +340,8 @@ public:
 
 protected:
 	id<MTLSharedEvent> _mtlEvent = nil;
-	std::mutex _lock;
-	std::unordered_set<MVKFenceSitter*> _sitters;
+	MVKUnfairLock _lock;
+	MVKSmallVector<MVKFenceSitter*, 2> _sitters;
 };
 
 
@@ -395,8 +394,8 @@ protected:
 	void propagateDebugName() override {}
 	void notifySitters();
 
-	std::mutex _lock;
-	std::unordered_set<MVKFenceSitter*> _fenceSitters;
+	MVKUnfairLock _lock;
+	MVKSmallVector<MVKFenceSitter*, 2> _fenceSitters;
 	bool _isSignaled;
 };
 
@@ -429,19 +428,14 @@ public:
 
 	MVKFenceSitter(bool waitAll) : _blocker(waitAll, 0) {}
 
-	~MVKFenceSitter() override { [_listener release]; }
-
 private:
 	friend class MVKFence;
 	friend class MVKTimelineSemaphoreMTLEvent;
-
-	MTLSharedEventListener* getMTLSharedEventListener();
 
 	void await() { _blocker.reserve(); }
 	void signaled() { _blocker.release(); }
 
 	MVKSemaphoreImpl _blocker;
-	MTLSharedEventListener* _listener = nil;
 };
 
 
@@ -578,7 +572,7 @@ protected:
 	bool _isDestroyed = false;
 	std::mutex _completionLock;
 	std::condition_variable _blocker;
-	std::string _compilerType = "Unknown";
+	const char* _compilerType = "Unknown";		// Always a string literal.
 	MVKPerformanceTracker* _pPerformanceTracker = nullptr;
 };
 

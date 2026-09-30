@@ -149,10 +149,10 @@ bool MVKBuffer::overlaps(VkDeviceSize offset, VkDeviceSize size, VkDeviceSize &o
 #pragma mark Metal
 
 id<MTLBuffer> MVKBuffer::getMTLBuffer() {
-	if (_mtlBuffer) { return _mtlBuffer; }
+	if (_mtlBuffer) [[likely]] { return _mtlBuffer; }
 	if (_deviceMemory) {
 		if (_deviceMemory->getMTLHeap()) {
-            lock_guard<mutex> lock(_lock);
+            lock_guard<MVKUnfairLock> lock(_lock);
             if (_mtlBuffer) { return _mtlBuffer; }
 			id<MTLBuffer> buf = [_deviceMemory->getMTLHeap() newBufferWithLength: getByteCount()
 			                                                             options: _deviceMemory->getMTLResourceOptions()
@@ -260,7 +260,7 @@ id<MTLTexture> MVKBufferView::getMTLTexture() {
 	if (!_mtlTexture && _mtlPixelFormat) {
 
 		// Lock and check again in case another thread has created the texture.
-		lock_guard<mutex> lock(_lock);
+		lock_guard<MVKUnfairLock> lock(_lock);
 		if (_mtlTexture) { return _mtlTexture; }
 
 		MTLTextureUsage usage = MTLTextureUsageShaderRead;

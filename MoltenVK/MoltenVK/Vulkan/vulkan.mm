@@ -48,8 +48,11 @@
 #pragma mark -
 #pragma mark Vulkan call templates
 
-// Optionally log start of function calls to stderr
-static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+// Optionally log start of function calls to stderr.
+// Tracing is off in almost every process, so the inline entry checks only for that,
+// and the cold body below is kept out of line and out of every entry point.
+__attribute__((noinline, cold))
+static uint64_t MVKTraceVulkanCallStartCold(const char* funcName) {
 
 	bool includeThread = false;
 	bool includeExit = false;
@@ -92,8 +95,14 @@ static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
 	return includeDuration ? mvkGetTimestamp() : 0;
 }
 
+static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+	if (getGlobalMVKConfig().traceVulkanCalls == MVK_CONFIG_TRACE_VULKAN_CALLS_NONE) [[likely]] { return 0; }
+	return MVKTraceVulkanCallStartCold(funcName);
+}
+
 // Optionally log end of function calls and timings to stderr
-static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t startTime) {
+__attribute__((noinline, cold))
+static void MVKTraceVulkanCallEndCold(const char* funcName, uint64_t startTime) {
 	switch(getGlobalMVKConfig().traceVulkanCalls) {
 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT:
 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT_THREAD_ID:
@@ -106,6 +115,11 @@ static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t star
 		default:
 			break;
 	}
+}
+
+static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t startTime) {
+	if (getGlobalMVKConfig().traceVulkanCalls == MVK_CONFIG_TRACE_VULKAN_CALLS_NONE) [[likely]] { return; }
+	MVKTraceVulkanCallEndCold(funcName, startTime);
 }
 
 #define MVKTraceVulkanCallStart()	uint64_t tvcStartTime = MVKTraceVulkanCallStartImpl(__FUNCTION__)
@@ -162,7 +176,7 @@ static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t star
 	if (value1 <= arg1Threshold1 && value2 <= arg2Threshold1) {									\
 		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
 	} else if (value1 <= arg1Threshold2 && value2 <= arg2Threshold1) {							\
-		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
+		MVKAddCmd(baseCmdType ##arg1Threshold2 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
 	} else if (value1 > arg1Threshold2 && value2 <= arg2Threshold1) {							\
 		MVKAddCmd(baseCmdType ##Multi ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);				\
 	} else if (value1 <= arg1Threshold1 && value2 <= arg2Threshold2) {							\

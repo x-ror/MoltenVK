@@ -23,6 +23,7 @@
 #include "MVKSmallVector.h"
 #include <unordered_map>
 #include <string>
+#include <string_view>
 #include <mutex>
 
 class MVKPhysicalDevice;
@@ -41,10 +42,12 @@ typedef struct MVKEntryPoint {
 	uint32_t api2Version;	///< Core version required in addition to extension.
 	bool isDevice;
 	bool isInstanceDeviceExtEntrypoint;
+	int32_t extIdx = -1;	///< Index of extName in an MVKExtensionList, resolved once when the table is built.
+	int32_t ext2Idx = -1;	///< Index of ext2Name in an MVKExtensionList, resolved once when the table is built.
 
-	bool isCore() { return apiVersion > 0; }
-	bool needsOtherCore() { return api2Version > 0; }
-	bool isEnabled(uint32_t enabledVersion, const MVKExtensionList& extList, const MVKExtensionList* instExtList = nullptr) {
+	bool isCore() const { return apiVersion > 0; }
+	bool needsOtherCore() const { return api2Version > 0; }
+	bool isEnabled(uint32_t enabledVersion, const MVKExtensionList& extList, const MVKExtensionList* instExtList = nullptr) const {
 		// The entry point is enabled if:
 		// - the required core version is enabled; or
 		// - the required extension is enabled, and
@@ -53,15 +56,27 @@ typedef struct MVKEntryPoint {
 		//   - the second extension is enabled.
 		// This logic is horrible, yes, but unfortunately, it's required by the spec.
 		return ((isCore() && MVK_VULKAN_API_VERSION_CONFORM(enabledVersion) >= apiVersion) ||
-				((extList.isEnabled(this->extName) ||
-				  (instExtList && instExtList->isEnabled(this->extName))) &&
+				(isExtensionEnabled(extIdx, extList, instExtList) &&
 				 ((!needsOtherCore() && !this->ext2Name) ||
 				  (needsOtherCore() && MVK_VULKAN_API_VERSION_CONFORM(enabledVersion) >= api2Version) ||
-				  (extList.isEnabled(this->ext2Name) ||
-				   (instExtList && instExtList->isEnabled(this->ext2Name))))));
+				  isExtensionEnabled(ext2Idx, extList, instExtList))));
+	}
+
+	// Returns whether the extension at the index is enabled in either list. An unknown extension (index -1) is never enabled.
+	static bool isExtensionEnabled(int32_t extnIdx, const MVKExtensionList& extList, const MVKExtensionList* instExtList) {
+		return extnIdx >= 0 && (extList.isEnabledAtIndex(extnIdx) || (instExtList && instExtList->isEnabledAtIndex(extnIdx)));
 	}
 
 } MVKEntryPoint;
+
+/** Hashes std::string keys and std::string_view lookups identically, so lookups by C string do not allocate. */
+struct MVKStringViewHash {
+	using is_transparent = void;
+	size_t operator()(std::string_view str) const noexcept { return std::hash<std::string_view>{}(str); }
+};
+
+/** The Vulkan entry point table, keyed by function name. */
+typedef std::unordered_map<std::string, MVKEntryPoint, MVKStringViewHash, std::equal_to<>> MVKEntryPointMap;
 
 
 #pragma mark -
@@ -195,13 +210,14 @@ protected:
 	friend MVKDevice;
 
 	void propagateDebugName() override {}
-	void initProcAddrs();
+	static void initProcAddrs(MVKEntryPointMap& entryPoints);
+	static const MVKEntryPointMap& getEntryPointMap();
 	void initMVKConfig(const VkInstanceCreateInfo* pCreateInfo);
 	void initDebugCallbacks(const VkInstanceCreateInfo* pCreateInfo);
 	VkDebugReportFlagsEXT getVkDebugReportFlagsFromLogLevel(MVKConfigLogLevel logLevel);
 	VkDebugUtilsMessageSeverityFlagBitsEXT getVkDebugUtilsMessageSeverityFlagBitsFromLogLevel(MVKConfigLogLevel logLevel);
 	VkDebugUtilsMessageTypeFlagsEXT getVkDebugUtilsMessageTypesFlagBitsFromLogLevel(MVKConfigLogLevel logLevel);
-	MVKEntryPoint* getEntryPoint(const char* pName);
+	static const MVKEntryPoint* getEntryPoint(const char* pName);
     void logVersions();
 	VkResult verifyLayers(uint32_t count, const char* const* names);
 
@@ -211,7 +227,6 @@ protected:
 	MVKSmallVector<MVKPhysicalDevice*, 2> _physicalDevices;
 	MVKSmallVector<MVKDebugReportCallback*> _debugReportCallbacks;
 	MVKSmallVector<MVKDebugUtilsMessenger*> _debugUtilMessengers;
-	std::unordered_map<std::string, MVKEntryPoint> _entryPoints;
 	std::string _mvkConfigStringHolders[kMVKConfigurationStringCount] = {};
 	std::mutex _dcbLock;
 	bool _hasDebugReportCallbacks;

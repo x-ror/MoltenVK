@@ -19,12 +19,14 @@
 #include "MVKShaderModule.h"
 #include "MVKPipeline.h"
 #include "MVKFoundation.h"
+#include <algorithm>
+#include <optional>
 #include <sys/stat.h>
 
 using namespace std;
 using namespace mvk;
 
-MVKMTLFunction::MVKMTLFunction(id<MTLFunction> mtlFunc, const SPIRVToMSLConversionResultInfo scRslts, MTLSize tgSize) {
+MVKMTLFunction::MVKMTLFunction(id<MTLFunction> mtlFunc, const SPIRVToMSLConversionResultInfo& scRslts, MTLSize tgSize) {
 	_mtlFunction = [mtlFunc retain];		// retained
 	shaderConversionResults = scRslts;
 	threadGroupSize = tgSize;
@@ -34,6 +36,25 @@ MVKMTLFunction::MVKMTLFunction(const MVKMTLFunction& other) {
 	_mtlFunction = [other._mtlFunction retain];		// retained
 	shaderConversionResults = other.shaderConversionResults;
 	threadGroupSize = other.threadGroupSize;
+}
+
+// Moving takes over the retained reference to the MTLFunction.
+MVKMTLFunction::MVKMTLFunction(MVKMTLFunction&& other) noexcept :
+	shaderConversionResults(std::move(other.shaderConversionResults)),
+	threadGroupSize(other.threadGroupSize),
+	_mtlFunction(other._mtlFunction) {
+	other._mtlFunction = nil;
+}
+
+MVKMTLFunction& MVKMTLFunction::operator=(MVKMTLFunction&& other) noexcept {
+	if (this != &other) {
+		[_mtlFunction release];
+		_mtlFunction = other._mtlFunction;
+		other._mtlFunction = nil;
+		shaderConversionResults = std::move(other.shaderConversionResults);
+		threadGroupSize = other.threadGroupSize;
+	}
+	return *this;
 }
 
 MVKMTLFunction& MVKMTLFunction::operator=(const MVKMTLFunction& other) {
@@ -97,6 +118,9 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 // Returns the library variant compiled with the macro definitions matching the specialization info,
 // creating it if needed, or nullptr if the specialization info specializes no macro constants.
 MVKShaderLibrary* MVKShaderLibrary::getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo) {
+	// Most shaders map no specialization constants to macros, so avoid building the list for them.
+	if (_shaderConversionResultInfo.specializationMacros.empty()) { return nullptr; }
+
 	vector<pair<uint32_t, MVKShaderMacroValue>> spec_list;
 	for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
 		const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
@@ -137,6 +161,16 @@ bool MVKShaderLibrary::ensureBaseMTLFunction(VkPipelineCreationFeedback* pShader
 			_baseMTLFunction = [_mtlLibrary newFunctionWithName: mtlFuncName];							// retained
 			_mtlFunctionConstants = [_baseMTLFunction.functionConstantsDictionary.allValues retain];	// retained
 		}
+
+		// Index the function constants by constant index once, so specialization lookups
+		// do not message each Metal constant object for every specialization entry.
+		_mtlFunctionConstantTypes.clear();
+		_mtlFunctionConstantTypes.reserve(_mtlFunctionConstants.count);
+		for (MTLFunctionConstant* mfc in _mtlFunctionConstants) {
+			_mtlFunctionConstantTypes.emplace_back((uint32_t)mfc.index, mfc.type);
+		}
+		std::sort(_mtlFunctionConstantTypes.begin(), _mtlFunctionConstantTypes.end(),
+				  [](const auto& a, const auto& b) { return a.first < b.first; });
 		addPerformanceInterval(getPerformanceStats().shaderCompilation.functionRetrieval, startTime);
 		if (pShaderFeedback) {
 			pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
@@ -172,19 +206,21 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 
 	if (pSpecializationInfo) {
 		specEntries.reserve(pSpecializationInfo->mapEntryCount);
+		size_t keySize = 0;
 		for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
 			const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
-			for (MTLFunctionConstant* mfc in _mtlFunctionConstants) {
-				if (mfc.index == pMapEntry->constantID) {
-					specEntries.push_back({ pMapEntry->constantID,
-											(const char*)pSpecializationInfo->pData + pMapEntry->offset,
-											(uint32_t)pMapEntry->size,
-											mfc.type });
-					break;
-				}
+			auto fcIter = std::lower_bound(_mtlFunctionConstantTypes.begin(), _mtlFunctionConstantTypes.end(), pMapEntry->constantID,
+										   [](const std::pair<uint32_t, MTLDataType>& fc, uint32_t constantID) { return fc.first < constantID; });
+			if (fcIter != _mtlFunctionConstantTypes.end() && fcIter->first == pMapEntry->constantID) {
+				specEntries.push_back({ pMapEntry->constantID,
+										(const char*)pSpecializationInfo->pData + pMapEntry->offset,
+										(uint32_t)pMapEntry->size,
+										fcIter->second });
+				keySize += sizeof(pMapEntry->constantID) + sizeof(uint32_t) + pMapEntry->size;
 			}
 		}
 		std::sort(specEntries.begin(), specEntries.end(), [](const SpecEntry& a, const SpecEntry& b) { return a.constantID < b.constantID; });
+		key.reserve(keySize);
 		for (auto& se : specEntries) {
 			const uint8_t* pID = (const uint8_t*)&se.constantID;
 			const uint8_t* pSize = (const uint8_t*)&se.size;
@@ -258,6 +294,7 @@ void MVKShaderLibrary::clearFunctionCache() {
 	_specializedMTLFunctions.clear();
 	[_mtlFunctionConstants release];
 	_mtlFunctionConstants = nil;
+	_mtlFunctionConstantTypes.clear();
 	[_baseMTLFunction release];
 	_baseMTLFunction = nil;
 	_isBaseMTLFunctionRetrieved = false;
@@ -301,18 +338,20 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 	compileLibrary(conversionResult.msl);
 }
 
+// The result info and compressed MSL are taken by value, so a caller that no longer needs
+// them (such as reading a pipeline cache) can move them in, while other callers copy.
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
-								   const SPIRVToMSLConversionResultInfo& resultInfo,
-								   const MVKCompressor<std::string>& compressedMSL,
+								   SPIRVToMSLConversionResultInfo resultInfo,
+								   MVKCompressor<std::string> compressedMSL,
 								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef,
 								   bool deferCompile) :
 	MVKBaseDeviceObject(owner->getDevice()),
 	_owner(owner),
+	_compressedMSL(std::move(compressedMSL)),
+	_shaderConversionResultInfo(std::move(resultInfo)),
 	_maySpecializeWithMacro(specializationMacroDef == nullptr),
 	_isCompileDeferred(deferCompile && !specializationMacroDef) {
 
-	_shaderConversionResultInfo = resultInfo;
-	_compressedMSL = compressedMSL;
 	if (_isCompileDeferred) { return; }
 	string msl;
 	decompressMSL(msl);
@@ -447,21 +486,26 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	// Shared access: the caller holds *pCacheLock. Look up under the lock. On a miss, if another
 	// thread is already converting an equivalent request, wait for it and look up again. Otherwise
 	// register this request as in flight and release the lock while converting and compiling.
-	SPIRVToMSLConversionConfiguration markedConfig = *pShaderConfig;
-	markedConfig.markAllInterfaceVarsAndResourcesUsed();
+	// The marked copy of the config is only needed on a miss, so the common cache hit does not pay
+	// for copying it. The config is unchanged by a miss, so the copy stays valid across retries.
+	std::optional<SPIRVToMSLConversionConfiguration> markedConfig;
 	std::shared_ptr<InFlightConversion> inFlight;
 	while (true) {
 		MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
 		if (shLib) { return shLib; }
 		if (pipeline->shouldFailOnPipelineCompileRequired()) { return nullptr; }
 
-		std::shared_ptr<InFlightConversion> other = findInFlight(markedConfig);
+		if ( !markedConfig ) {
+			markedConfig.emplace(*pShaderConfig);
+			markedConfig->markAllInterfaceVarsAndResourcesUsed();
+		}
+		std::shared_ptr<InFlightConversion> other = findInFlight(*markedConfig);
 		if ( !other ) { break; }
 		other->done.wait(*pCacheLock, [&other]{ return other->isDone; });
 	}
 
 	inFlight = std::make_shared<InFlightConversion>();
-	inFlight->config = std::move(markedConfig);
+	inFlight->config = std::move(*markedConfig);
 	_inFlight.push_back(inFlight);
 
 	pCacheLock->unlock();
@@ -538,12 +582,13 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 }
 
 // Adds and returns a new shader library configured from contents read from a pipeline cache.
-MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
-														  const SPIRVToMSLConversionResultInfo& resultInfo,
-														  const MVKCompressor<std::string>& compressedMSL,
+// The arguments are taken by value and moved into the cache, so the caller's copies are not duplicated.
+MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(SPIRVToMSLConversionConfiguration shaderConfig,
+														  SPIRVToMSLConversionResultInfo resultInfo,
+														  MVKCompressor<std::string> compressedMSL,
 														  bool deferCompile) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL, nullptr, deferCompile);
-	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, std::move(resultInfo), std::move(compressedMSL), nullptr, deferCompile);
+	_shaderLibraries.emplace_back(std::move(shaderConfig), shLib);
 	return shLib;
 }
 
@@ -855,7 +900,7 @@ NSNumber *MVKShaderLibraryCompiler::getMacroValue(const MSLSpecializationMacroIn
 
 void MVKShaderLibraryCompiler::handleError() {
 	if (_mtlLibrary) {
-		MVKLogInfo("%s compilation succeeded with warnings (Error code %li):\n%s", _compilerType.c_str(),
+		MVKLogInfo("%s compilation succeeded with warnings (Error code %li):\n%s", _compilerType,
 				   (long)_compileError.code, _compileError.localizedDescription.UTF8String);
 	} else {
 		MVKMetalCompiler::handleError();
