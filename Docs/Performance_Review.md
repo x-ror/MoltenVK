@@ -166,6 +166,12 @@ reportMessage(...)` so arguments such as `.UTF8String` are not evaluated.
 
 ## 2. Pipeline creation and cache load
 
+**Status:** 2.1 through 2.4 are implemented on this branch. 2.4 keeps the `std::string` keys of
+the reflection maps, since reflection runs once per stage per pipeline and the map lookup is
+not measurable next to the conversion; the copy into the small vector is now reserved. 2.5
+is deliberately not done: it changes the on-disk pipeline cache format and needs a
+`pipelineCacheUUID` bump, which is a maintainer decision.
+
 ### 2.1 Whole conversion config deep-copied on every shader lookup, including cache hits (M-H / L)
 `GPUObjects/MVKShaderModule.mm:450-451` copies `SPIRVToMSLConversionConfiguration` (five
 vectors and a string, `resourceBindings` is stage-count × bindings entries of ~136 B with

@@ -44,13 +44,15 @@ class MVKShaderModule;
 
 /** A MTLFunction and corresponding result information resulting from a shader conversion. */
 typedef struct MVKMTLFunction {
-  mvk::SPIRVToMSLConversionResultInfo shaderConversionResults;
+	mvk::SPIRVToMSLConversionResultInfo shaderConversionResults;
 	MTLSize threadGroupSize;
 	id<MTLFunction> getMTLFunction() { return _mtlFunction; }
 
-	MVKMTLFunction(id<MTLFunction> mtlFunc, const mvk::SPIRVToMSLConversionResultInfo scRslts, MTLSize tgSize);
+	MVKMTLFunction(id<MTLFunction> mtlFunc, const mvk::SPIRVToMSLConversionResultInfo& scRslts, MTLSize tgSize);
 	MVKMTLFunction(const MVKMTLFunction& other);
+	MVKMTLFunction(MVKMTLFunction&& other) noexcept;
 	MVKMTLFunction& operator=(const MVKMTLFunction& other);
+	MVKMTLFunction& operator=(MVKMTLFunction&& other) noexcept;
 	MVKMTLFunction() {}
 	~MVKMTLFunction();
 
@@ -60,7 +62,7 @@ private:
 } MVKMTLFunction;
 
 /** A MVKMTLFunction indicating an invalid MTLFunction. The mtlFunction member is nil. */
-const MVKMTLFunction MVKMTLFunctionNull(nil, mvk::SPIRVToMSLConversionResultInfo(), MTLSizeMake(1, 1, 1));
+inline const MVKMTLFunction MVKMTLFunctionNull(nil, mvk::SPIRVToMSLConversionResultInfo(), MTLSizeMake(1, 1, 1));
 
 typedef struct MVKShaderMacroValue {
 	union {
@@ -131,8 +133,8 @@ public:
 	 * of which an app may never use in a given run.
 	 */
 	MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
-					 const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-					 const MVKCompressor<std::string>& compressedMSL,
+					 mvk::SPIRVToMSLConversionResultInfo resultInfo,
+					 MVKCompressor<std::string> compressedMSL,
 					 const std::vector<std::pair<uint32_t, MVKShaderMacroValue>>* specializationMacroDef = nullptr,
 					 bool deferCompile = false);
 
@@ -192,6 +194,7 @@ protected:
 	 */
 	id<MTLFunction> _baseMTLFunction = nil;
 	NSArray<MTLFunctionConstant*>* _mtlFunctionConstants = nil;
+	std::vector<std::pair<uint32_t, MTLDataType>> _mtlFunctionConstantTypes;	// Sorted by constant index. Guarded by _functionsLock.
 	bool _isBaseMTLFunctionRetrieved = false;
 	std::map<std::vector<uint8_t>, id<MTLFunction>> _specializedMTLFunctions;
 	std::mutex _functionsLock;
@@ -245,9 +248,9 @@ protected:
 										uint64_t startTime = 0);
 	MVKShaderLibrary* addShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   const mvk::SPIRVToMSLConversionResult& conversionResult);
-	MVKShaderLibrary* addShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
-									   const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-									   const MVKCompressor<std::string>& compressedMSL,
+	MVKShaderLibrary* addShaderLibrary(mvk::SPIRVToMSLConversionConfiguration shaderConfig,
+									   mvk::SPIRVToMSLConversionResultInfo resultInfo,
+									   MVKCompressor<std::string> compressedMSL,
 									   bool deferCompile);
 	void merge(MVKShaderLibraryCache* other);
 
@@ -393,6 +396,7 @@ protected:
 	template <typename V>
 	bool copyInterfaceReflection(spv::ExecutionModel model, spv::StorageClass storage, const char* entryName, V& vars, std::string& errorLog) {
 		const InterfaceReflection& refl = getInterfaceReflection(model, storage, entryName);
+		vars.reserve(refl.vars.size());
 		vars.assign(refl.vars.begin(), refl.vars.end());
 		errorLog = refl.errorLog;
 		return refl.success;
