@@ -36,6 +36,12 @@ Released TBD
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 - Fix a crash, or push descriptors not being written, when the `VkDescriptorUpdateTemplate` of `vkCmdPushDescriptorSetWithTemplate()` is destroyed before the command buffer is submitted.
 - Pass the draw index to shaders that read `gl_DrawID` inline on direct draws, and return temporary `MTLBuffer` allocations to their pools with one completion handler per Metal command buffer.
+- Fix a self-deadlock in `MVKQueryPool` when a deferred `vkCmdCopyQueryPoolResults()` with `VK_QUERY_RESULT_WAIT_BIT` is encoded by a compute copy.
+- Fix unlocked insertion into the per-command-pool Metal resource maps, the per-image texture view map, and the shared pixel format tables when looking up an entry that does not exist.
+- Fix thread-unsafe one-time initialization of the global configuration, the platform pixel formats, the OS version, and the layer manager.
+- Fix `MVKSmallVector` copy assignment not compiling, reverse iteration over pointer vectors being empty, and mark its move operations `noexcept`.
+- Fix `vkCmdBeginRenderPass()` with two clear values being recorded into the wrong command pool.
+- Fix an uninitialized descriptor pool free-list size, a missing `break` when reading `VkExportMetalObjectCreateInfoEXT` during memory allocation, stale `pNext` pointers kept in recorded dynamic rendering attachments, a leaked Metal command buffer label per queue, and a missing `default` in `mvkMTLIndexTypeSizeInBytes()`.
 
 
 

@@ -499,7 +499,7 @@ class MVKDescriptorPoolFreeList {
 		Entry(size_t size_): size(size_) {}
 	};
 	std::vector<Entry> entries;
-	size_t _freeSize;
+	size_t _freeSize = 0;
 
 public:
 	void add(size_t item, size_t size);

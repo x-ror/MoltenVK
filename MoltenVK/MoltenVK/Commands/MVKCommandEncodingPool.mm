@@ -39,11 +39,14 @@ MVKVulkanAPIObject* MVKCommandEncodingPool::getVulkanAPIObject() { return _comma
 // Step 1 handles the common case where the resource exists, without the expense of a lock.
 // Step 2 guards against a potential race condition where two threads get past Step 1 at
 // the same time, and then both barrel ahead onto Step 3.
+//
+// This pattern is only safe for resources held in a plain member variable, where Step 1
+// is a single pointer read. Resources held in a map must use MVK_ENC_REZ_ACCESS_MAP below.
 #define MVK_ENC_REZ_ACCESS(rezAccess, rezFactoryFunc)								\
 	auto rez = rezAccess;															\
 	if (rez) { return rez; }														\
 																					\
-	lock_guard<mutex> lock(_lock);													\
+	unique_lock<shared_mutex> lock(_lock);											\
 	rez = rezAccess;																\
 	if (rez) { return rez; }														\
 																					\
@@ -51,12 +54,29 @@ MVKVulkanAPIObject* MVKCommandEncodingPool::getVulkanAPIObject() { return _comma
 	rezAccess = rez;																\
 	return rez
 
+// Same three-step pattern for resources held in a map. Looking up a map entry with operator[]
+// inserts on a miss and may rehash, so Step 1 must hold the lock in shared mode and use find(),
+// and Step 3 takes the lock exclusively to insert.
+#define MVK_ENC_REZ_ACCESS_MAP(rezMap, rezKey, rezFactoryFunc)						\
+	{																				\
+		shared_lock<shared_mutex> readLock(_lock);									\
+		auto iter = rezMap.find(rezKey);											\
+		if (iter != rezMap.end() && iter->second) { return iter->second; }			\
+	}																				\
+																					\
+	unique_lock<shared_mutex> lock(_lock);											\
+	auto& rez = rezMap[rezKey];														\
+	if (rez) { return rez; }														\
+																					\
+	rez = _commandPool->getDevice()->getCommandResourceFactory()->rezFactoryFunc;	\
+	return rez
+
 
 id<MTLRenderPipelineState> MVKCommandEncodingPool::getCmdClearMTLRenderPipelineState(MVKRPSKeyClearAtt& attKey) {
-	MVK_ENC_REZ_ACCESS(_cmdClearMTLRenderPipelineStates[attKey], newCmdClearMTLRenderPipelineState(attKey, _commandPool));
+	MVK_ENC_REZ_ACCESS_MAP(_cmdClearMTLRenderPipelineStates, attKey, newCmdClearMTLRenderPipelineState(attKey, _commandPool));
 }
 id<MTLRenderPipelineState> MVKCommandEncodingPool::getCmdBlitImageMTLRenderPipelineState(MVKRPSKeyBlitImg& blitKey) {
-	MVK_ENC_REZ_ACCESS(_cmdBlitImageMTLRenderPipelineStates[blitKey], newCmdBlitImageMTLRenderPipelineState(blitKey, _commandPool));
+	MVK_ENC_REZ_ACCESS_MAP(_cmdBlitImageMTLRenderPipelineStates, blitKey, newCmdBlitImageMTLRenderPipelineState(blitKey, _commandPool));
 }
 
 id<MTLDepthStencilState> MVKCommandEncodingPool::getMTLDepthStencilState(bool useDepth, bool useStencil) {
@@ -89,15 +109,15 @@ MVKMTLBufferAllocation* MVKCommandEncodingPool::acquireMTLBufferAllocation(NSUIn
 
 
 id<MTLDepthStencilState> MVKCommandEncodingPool::getMTLDepthStencilState(MVKMTLDepthStencilDescriptorData& dsData) {
-	MVK_ENC_REZ_ACCESS(_mtlDepthStencilStates[dsData], newMTLDepthStencilState(dsData));
+	MVK_ENC_REZ_ACCESS_MAP(_mtlDepthStencilStates, dsData, newMTLDepthStencilState(dsData));
 }
 
 MVKImage* MVKCommandEncodingPool::getTransferMVKImage(MVKImageDescriptorData& imgData) {
-	MVK_ENC_REZ_ACCESS(_transferImages[imgData], newMVKImage(imgData));
+	MVK_ENC_REZ_ACCESS_MAP(_transferImages, imgData, newMVKImage(imgData));
 }
 
 MVKBuffer* MVKCommandEncodingPool::getTransferMVKBuffer(MVKBufferDescriptorData& buffData) {
-	MVK_ENC_REZ_ACCESS(_transferBuffers[buffData], newMVKBuffer(buffData, _transferBufferMemory[buffData]));
+	MVK_ENC_REZ_ACCESS_MAP(_transferBuffers, buffData, newMVKBuffer(buffData, _transferBufferMemory[buffData]));
 }
 
 id<MTLComputePipelineState> MVKCommandEncodingPool::getCmdCopyBufferBytesMTLComputePipelineState() {
@@ -173,7 +193,7 @@ id<MTLComputePipelineState> MVKCommandEncodingPool::getConvertUint8IndicesMTLCom
 }
 
 void MVKCommandEncodingPool::clear() {
-	lock_guard<mutex> lock(_lock);
+	unique_lock<shared_mutex> lock(_lock);
 	destroyMetalResources();
 }
 

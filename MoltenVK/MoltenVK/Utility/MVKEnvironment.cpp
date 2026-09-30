@@ -96,11 +96,8 @@ void mvkSetConfig(MVKConfiguration& dstMVKConfig, const MVKConfiguration& srcMVK
 
 #pragma mark Load global configuration from environment variables
 
-static bool _mvkGlobalConfigInitialized = false;
 static void mvkInitGlobalConfigFromEnvVars() {
 	static_assert(getExpectedMVKConfigurationSize() == sizeof(MVKConfiguration), "MVKConfigMembers.def does not match the members of MVKConfiguration.");
-
-	_mvkGlobalConfigInitialized = true;
 
 	MVKConfiguration evCfg;
 	std::string evGPUCapFileStrObj;
@@ -150,10 +147,11 @@ static std::string _globalMVKConfigStringHolders[kMVKConfigurationStringCount] =
 // Returns the MoltenVK config, lazily initializing it if necessary.
 // We initialize lazily instead of in a library constructor function to
 // ensure the NSProcessInfo environment is available when called upon.
+// The function-local static makes the one-time initialization thread-safe,
+// so a concurrent caller blocks until the config is fully populated.
 const MVKConfiguration& getGlobalMVKConfig() {
-	if ( !_mvkGlobalConfigInitialized ) {
-		mvkInitGlobalConfigFromEnvVars();
-	}
+	static const bool isInitialized = (mvkInitGlobalConfigFromEnvVars(), true);
+	(void)isInitialized;
 	return _globalMVKConfig;
 }
 

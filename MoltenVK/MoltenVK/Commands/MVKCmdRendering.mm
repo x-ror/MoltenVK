@@ -141,7 +141,7 @@ VkResult MVKCmdBeginRendering<N>::setContent(MVKCommandBuffer* cmdBuff,
 	_colorAttachments.assign(_renderingInfo.pColorAttachments,
 							 _renderingInfo.pColorAttachments + _renderingInfo.colorAttachmentCount);
 	_renderingInfo.pColorAttachments = _colorAttachments.data();
-	for (auto caAtt : _colorAttachments) { caAtt.pNext = nullptr; }
+	for (auto& caAtt : _colorAttachments) { caAtt.pNext = nullptr; }
 
 	if (mvkSetOrClear(&_depthAttachment, _renderingInfo.pDepthAttachment)) {
 		_renderingInfo.pDepthAttachment = &_depthAttachment;

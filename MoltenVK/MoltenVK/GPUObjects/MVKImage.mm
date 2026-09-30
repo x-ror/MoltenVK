@@ -128,17 +128,14 @@ id<MTLTexture> MVKImagePlane::getMTLTexture(MTLPixelFormat mtlPixFmt) {
     // Note: Retrieve the base texture outside of lock to avoid deadlock if it too needs to be lazily created.
     // Delegate to _image in case the method is overriden. (e.g. if it's a swapchain image)
     if (mtlPixFmt == _mtlPixFmt) { return _image->getMTLTexture(_planeIndex); }
-    id<MTLTexture> mtlTex = _mtlTextureViews[mtlPixFmt];
+    // Look up the view texture under the lock. Using operator[] here would insert into the
+    // map, and the map must not be modified without holding the lock.
+    id<MTLTexture> baseTexture = _image->getMTLTexture(_planeIndex);
+    lock_guard<mutex> lock(_image->_lock);
+    id<MTLTexture>& mtlTex = _mtlTextureViews[mtlPixFmt];
     if ( !mtlTex ) {
-        // Lock and check again in case another thread has created the view texture.
-        id<MTLTexture> baseTexture = _image->getMTLTexture(_planeIndex);
-        lock_guard<mutex> lock(_image->_lock);
-        mtlTex = _mtlTextureViews[mtlPixFmt];
-        if ( !mtlTex ) {
-            mtlTex = [baseTexture newTextureViewWithPixelFormat: mtlPixFmt];    // retained
-            _image->_device->getLiveResources().add(mtlTex);
-            _mtlTextureViews[mtlPixFmt] = mtlTex;
-        }
+        mtlTex = [baseTexture newTextureViewWithPixelFormat: mtlPixFmt];    // retained
+        _image->_device->getLiveResources().add(mtlTex);
     }
     return mtlTex;
 }

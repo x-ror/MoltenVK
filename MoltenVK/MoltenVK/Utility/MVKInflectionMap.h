@@ -19,7 +19,10 @@
 #pragma once
 
 #include "MVKSmallVector.h"
+#include <cstdint>
+#include <limits>
 #include <unordered_map>
+#include <utility>
 
 /**
  * An unordered map that splits elements between a fast-access vector of LinearCount consecutively
@@ -73,14 +76,35 @@ public:
 	};
 	using reverse_iterator = std::reverse_iterator<iterator>;
 
-	const ValueType& operator[](const KeyType idx) const { return getValue(idx); }
+	/**
+	 * Returns a reference to the value at the key, adding a default-constructed value
+	 * if the key has not been set yet. Because this can grow the map, it must only be
+	 * used while the map is being built, or with external synchronization.
+	 */
 	ValueType& operator[](const KeyType idx) { return getValue(idx); }
+
+	/**
+	 * Returns a pointer to the value at the key, or nullptr if the key has not been set.
+	 * Unlike operator[], this never modifies the map, so it is safe for concurrent lookups
+	 * once the map has been built.
+	 */
+	const ValueType* find(const KeyType idx) const {
+		IndexType valIdx = kMVKInflectionMapValueMissing;
+		if (idx < LinearCount) {
+			valIdx = _linearIndexes[idx].value;
+		} else {
+			auto iter = _inflectionIndexes.find(idx);
+			if (iter != _inflectionIndexes.end()) { valIdx = iter->second.value; }
+		}
+		return valIdx == kMVKInflectionMapValueMissing ? nullptr : &_values[valIdx];
+	}
+	ValueType* find(const KeyType idx) { return const_cast<ValueType*>(std::as_const(*this).find(idx)); }
 
 	iterator begin() { return iterator(*this, 0); }
 	iterator end()   { return iterator(*this, _values.size()); }
 
-	bool empty() { return _values.size() == 0; }
-	size_t size() { return _values.size(); }
+	bool empty() const { return _values.size() == 0; }
+	size_t size() const { return _values.size(); }
 	void reserve(const size_t new_cap) { _values.reserve(new_cap); }
 	void shrink_to_fit() { _values.shrink_to_fit(); }
 

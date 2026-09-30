@@ -17,7 +17,14 @@ Paths are relative to `MoltenVK/MoltenVK/` unless they start with `MoltenVKShade
 ## 0. Correctness bugs found on the way (fix before anything else)
 
 These are not optimizations, but they were found while reading the hot paths and each is a
-one- to five-line fix.
+small fix.
+
+**Status:** all items except 0.11 are fixed on this branch. 0.2, 0.6 and 0.7 are fixed by
+always taking the lock for map-backed lookups (a shared lock on the read path of the encoding
+pool) or by adding a non-inserting `find()` to `MVKInflectionMap`, because an unlocked
+`find()` racing a locked insert into a `std::unordered_map` is still a data race. 0.11 is left
+unchanged: the same code is in upstream MoltenVK, adding the `break` changes which layered
+render passes get `renderTargetArrayLength` set, and that needs a CTS run on real hardware.
 
 | # | Where | Problem | Fix | Impact / Risk |
 |---|---|---|---|---|

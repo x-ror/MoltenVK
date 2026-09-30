@@ -32,11 +32,10 @@ using namespace std;
 
 #pragma mark Pixel formats
 
-static std::unique_ptr<MVKPixelFormats> _platformPixelFormats;
-
+// Thread-safe lazy creation via a function-local static.
 static MVKPixelFormats* getPlatformPixelFormats() {
-	if ( !_platformPixelFormats ) { _platformPixelFormats.reset(new MVKPixelFormats()); }
-	return _platformPixelFormats.get();
+	static std::unique_ptr<MVKPixelFormats> platformPixelFormats(new MVKPixelFormats());
+	return platformPixelFormats.get();
 }
 
 MVK_PUBLIC_SYMBOL bool mvkVkFormatIsSupported(VkFormat vkFormat) {
@@ -738,6 +737,7 @@ MVK_PUBLIC_SYMBOL size_t mvkMTLIndexTypeSizeInBytes(MTLIndexType mtlIdxType) {
 	switch (mtlIdxType) {
 		case MTLIndexTypeUInt16:	return 2;
 		case MTLIndexTypeUInt32:	return 4;
+		default:					return 2;
 	}
 }
 
