@@ -85,6 +85,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 
 	@autoreleasepool {
 		id<MTLFunction> mtlFunc = getSpecializedMTLFunction(pSpecializationInfo, pShaderFeedback, shaderModule);
+		if (mtlFunc && pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 
 		auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
 		return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
@@ -166,7 +167,6 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 	// the function cache on another thread cannot release a function before the caller retains it.
 	unique_lock<mutex> lock(_functionsLock);
 	if ( !ensureBaseMTLFunction(pShaderFeedback, shaderModule) ) { return nil; }
-	if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 	if (_mtlFunctionConstants.count == 0) { return [[_baseMTLFunction retain] autorelease]; }
 	string funcName = _shaderConversionResultInfo.entryPoint.mtlFunctionName;
 
@@ -363,13 +363,16 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 // Macro-specialized variants are owned by the library that created them, so they are not
 // shared with the copy. The copy re-creates any variant it needs on first use.
+// The other library may be compiling on first use on another thread. Its deferred flag is
+// cleared only after its MTLLibrary is set, so read the flag first, and read the MTLLibrary
+// only if the flag is clear. Otherwise the copy stays deferred and compiles its own library.
 MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	MVKBaseDeviceObject(other._device),
 	_owner(other._owner),
 	_maySpecializeWithMacro(other._maySpecializeWithMacro),
 	_isCompileDeferred(other._isCompileDeferred.load()) {
 
-	_mtlLibrary = [other._mtlLibrary retain];
+	if ( !_isCompileDeferred ) { _mtlLibrary = [other._mtlLibrary retain]; }
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
 }
@@ -378,9 +381,10 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
 	if (this == &other) { return *this; }
 	clearFunctionCache();
 	_isCompileDeferred = other._isCompileDeferred.load();
-	if (_mtlLibrary != other._mtlLibrary) {
+	id<MTLLibrary> otherLib = _isCompileDeferred ? nil : other._mtlLibrary;
+	if (_mtlLibrary != otherLib) {
 		[_mtlLibrary release];
-		_mtlLibrary = [other._mtlLibrary retain];
+		_mtlLibrary = [otherLib retain];
 	}
 	_owner = other._owner;
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
