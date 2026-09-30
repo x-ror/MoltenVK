@@ -159,14 +159,6 @@ void MVKPipelineLayout::populateShaderConversionConfig(SPIRVToMSLConversionConfi
 	shaderConfig.discreteDescriptorSets.clear();
 	shaderConfig.dynamicBufferDescriptors.clear();
 
-	// Reserve for the largest number of bindings this can add: every descriptor binding may
-	// add up to two entries per shader stage, plus the push constant and size buffers.
-	size_t maxBindingCnt = kMVKShaderStageCount;
-	for (MVKDescriptorSetLayout* layout : _descriptorSetLayouts) {
-		maxBindingCnt += (layout->bindings().size() * 2 + 1) * kMVKShaderStageCount;
-	}
-	shaderConfig.resourceBindings.reserve(maxBindingCnt);
-
 	// Add any resource bindings used by push-constants.
 	for (uint32_t i = 0; i < kMVKShaderStageCount; i++) {
 		auto stage = static_cast<MVKShaderStage>(i);
