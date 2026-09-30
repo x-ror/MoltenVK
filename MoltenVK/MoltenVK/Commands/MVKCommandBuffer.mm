@@ -467,6 +467,7 @@ void MVKCommandEncoder::encodeCommandsImpl(MVKCommand* command) {
 void MVKCommandEncoder::endEncoding() {
 	endCurrentMetalEncoding();
 	finishQueries();
+	returnTempMTLBuffersOnCompletion();
 }
 
 void MVKCommandEncoder::encodeSecondary(MVKCommandBuffer* secondaryCmdBuffer) {
@@ -1192,11 +1193,27 @@ void MVKCommandEncoder::setComputeBytes(id<MTLComputeCommandEncoder> mtlEncoder,
 	}
 }
 
-// Return the MTLBuffer allocation to the pool once the command buffer is done with it
+// The MTLBuffer allocation is returned to the pool once the command buffer is done with it.
+// See returnTempMTLBuffersOnCompletion().
 const MVKMTLBufferAllocation* MVKCommandEncoder::getTempMTLBuffer(NSUInteger length, bool isPrivate, bool isDedicated) {
     MVKMTLBufferAllocation* mtlBuffAlloc = getCommandEncodingPool()->acquireMTLBufferAllocation(length, isPrivate, isDedicated);
-    [_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) { mtlBuffAlloc->returnToPool(); }];
+	_tempMTLBufferAllocations.push_back(mtlBuffAlloc);
     return mtlBuffAlloc;
+}
+
+// Register a single command buffer completion handler that returns all temporary MTLBuffer allocations
+// made while encoding to their pools. The MTLCommandBuffer does not change between beginEncoding() and
+// endEncoding(), so it is the one every allocation was used with.
+// Ownership of the collection of allocations is passed to the handler.
+void MVKCommandEncoder::returnTempMTLBuffersOnCompletion() {
+	if (_tempMTLBufferAllocations.empty()) { return; }
+
+	auto* pAllocs = new MVKSmallVector<MVKMTLBufferAllocation*, 16>(_tempMTLBufferAllocations);
+	_tempMTLBufferAllocations.clear();
+	[_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
+		MVKMTLBufferAllocationPool::returnAllocations(pAllocs->contents());
+		delete pAllocs;
+	}];
 }
 
 MVKCommandEncodingPool* MVKCommandEncoder::getCommandEncodingPool() {

@@ -194,7 +194,6 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
     const MVKMTLBufferAllocation* tcOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcPatchOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcLevelBuff = nullptr;
-    const MVKMTLBufferAllocation* tempDrawIDBuff = nullptr;
 	struct {
 		uint32_t inControlPointCount = 0;
 		uint32_t patchCount = 0;
@@ -204,12 +203,6 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
         tessParams.inControlPointCount = cmdEncoder->getVkGraphics().getPatchControlPoints();
         outControlPointCount = pipeline->getOutputControlPointCount();
         tessParams.patchCount = mvkCeilingDivide(_vertexCount, tessParams.inControlPointCount) * _instanceCount;
-    }
-    if (pipeline->needsDrawIdBuffer()) {
-        tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(sizeof(uint32_t));
-
-        // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
-        *(uint32_t*)tempDrawIDBuff->getContents() = _drawIndex;
     }
     for (uint32_t s : stages) {
         auto stage = MVKGraphicsStage(s);
@@ -229,9 +222,10 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                          atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::Output]];
                 }
                 if (pipeline->needsDrawIdBuffer()) {
-                    [mtlTessCtlEncoder setBuffer: tempDrawIDBuff->_mtlBuffer
-                                          offset: tempDrawIDBuff->_offset
-                                         atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+                    // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
+                    [mtlTessCtlEncoder setBytes: &_drawIndex
+                                         length: sizeof(_drawIndex)
+                                        atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                 }
 				[mtlTessCtlEncoder setStageInRegion: MTLRegionMake2D(_firstVertex, _firstInstance, _vertexCount, _instanceCount)];
 				// If there are vertex bindings with a zero vertex divisor, I need to offset them by
@@ -324,9 +318,10 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                     uint32_t instanceCount = _instanceCount * viewCount;
                     cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
                     if (pipeline->needsDrawIdBuffer()) {
-                        [cmdEncoder->_mtlRenderEncoder setVertexBuffer: tempDrawIDBuff->_mtlBuffer
-                                                                offset: tempDrawIDBuff->_offset
-                                                               atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+                        // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
+                        [cmdEncoder->_mtlRenderEncoder setVertexBytes: &_drawIndex
+                                                               length: sizeof(_drawIndex)
+                                                              atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
@@ -478,7 +473,6 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
     const MVKMTLBufferAllocation* tcOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcPatchOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcLevelBuff = nullptr;
-    const MVKMTLBufferAllocation* tempDrawIDBuff = nullptr;
 	struct {
 		uint32_t inControlPointCount = 0;
 		uint32_t patchCount = 0;
@@ -488,12 +482,6 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
         tessParams.inControlPointCount = cmdEncoder->getVkGraphics().getPatchControlPoints();
         outControlPointCount = pipeline->getOutputControlPointCount();
         tessParams.patchCount = mvkCeilingDivide(_indexCount, tessParams.inControlPointCount) * _instanceCount;
-    }
-    if (pipeline->needsDrawIdBuffer()) {
-        tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(sizeof(uint32_t));
-
-        // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
-        *(uint32_t*)tempDrawIDBuff->getContents() = _drawIndex;
     }
     for (uint32_t s : stages) {
         auto stage = MVKGraphicsStage(s);
@@ -512,9 +500,10 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                          atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::Output]];
                 }
                 if (pipeline->needsDrawIdBuffer()) {
-                    [mtlTessCtlEncoder setBuffer: tempDrawIDBuff->_mtlBuffer
-                                          offset: tempDrawIDBuff->_offset
-                                         atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+                    // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
+                    [mtlTessCtlEncoder setBytes: &_drawIndex
+                                         length: sizeof(_drawIndex)
+                                        atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                 }
 				[mtlTessCtlEncoder setBuffer: ibb.mtlBuffer
                                       offset: idxBuffOffset
@@ -613,9 +602,10 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                     uint32_t instanceCount = _instanceCount * viewCount;
                     cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
                     if (pipeline->needsDrawIdBuffer()) {
-                        [cmdEncoder->_mtlRenderEncoder setVertexBuffer: tempDrawIDBuff->_mtlBuffer
-                                                                offset: tempDrawIDBuff->_offset
-                                                               atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+                        // Zero for a single draw, or the index of this draw within a vkCmdDrawMulti*EXT() call.
+                        [cmdEncoder->_mtlRenderEncoder setVertexBytes: &_drawIndex
+                                                               length: sizeof(_drawIndex)
+                                                              atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()

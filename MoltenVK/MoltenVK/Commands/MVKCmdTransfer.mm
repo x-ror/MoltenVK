@@ -1780,20 +1780,13 @@ void MVKCmdUpdateBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     id<MTLBuffer> dstMTLBuff = _dstBuffer->getMTLBuffer();
     NSUInteger dstMTLBuffOffset = _dstBuffer->getMTLBufferOffset() + _dstOffset;
 
-    // Copy data to the source MTLBuffer
-    MVKMTLBufferAllocation* srcMTLBufferAlloc = cmdEncoder->getCommandEncodingPool()->acquireMTLBufferAllocation(_dataSize);
-    void* pBuffData = srcMTLBufferAlloc->getContents();
-    memcpy(pBuffData, _srcDataCache.data(), _dataSize);
+    // Copy data to a temporary source MTLBuffer, which is returned to the pool once the command buffer is done with it
+    const MVKMTLBufferAllocation* srcMTLBufferAlloc = cmdEncoder->copyToTempMTLBufferAllocation(_srcDataCache.data(), _dataSize);
 
     [mtlBlitEnc copyFromBuffer: srcMTLBufferAlloc->_mtlBuffer
                   sourceOffset: srcMTLBufferAlloc->_offset
                       toBuffer: dstMTLBuff
              destinationOffset: dstMTLBuffOffset
                           size: _dataSize];
-
-    // Return the MTLBuffer allocation to the pool once the command buffer is done with it
-    [cmdEncoder->_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
-        srcMTLBufferAlloc->returnToPool();
-    }];
 }
 

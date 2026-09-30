@@ -87,6 +87,12 @@ public:
     /** Returns a new allocation (without mutual exclusion). */
     MVKMTLBufferAllocation* acquireAllocationUnlocked();
 
+	/**
+	 * Returns each of the allocations to the pool that created it.
+	 * Reorders the contents, so that each pool is locked only once.
+	 */
+	static void returnAllocations(MVKArrayRef<MVKMTLBufferAllocation*> allocations);
+
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return _device->getVulkanAPIObject(); };
 
