@@ -149,7 +149,7 @@ bool MVKBuffer::overlaps(VkDeviceSize offset, VkDeviceSize size, VkDeviceSize &o
 #pragma mark Metal
 
 id<MTLBuffer> MVKBuffer::getMTLBuffer() {
-	if (_mtlBuffer) { return _mtlBuffer; }
+	if (_mtlBuffer) [[likely]] { return _mtlBuffer; }
 	if (_deviceMemory) {
 		if (_deviceMemory->getMTLHeap()) {
             lock_guard<MVKUnfairLock> lock(_lock);

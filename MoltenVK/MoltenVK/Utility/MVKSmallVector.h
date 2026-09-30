@@ -52,6 +52,7 @@ using MVKSmallVector = std::vector<T>;
 #include "MVKSmallVectorAllocator.h"
 #include "MVKFoundation.h"
 #include <type_traits>
+#include <algorithm>
 #include <initializer_list>
 #include <utility>
 
@@ -254,6 +255,17 @@ public:
   void swap( MVKSmallVectorImpl &a ) noexcept
   {
     alc.swap( a.alc );
+  }
+
+  // Removes the elements that satisfy the predicate, and returns how many were removed.
+  // Found by argument-dependent lookup, like std::erase_if() for the standard containers.
+  template<class Pred>
+  friend size_t erase_if( MVKSmallVectorImpl &v, Pred pred )
+  {
+    auto new_end = std::remove_if( v.begin(), v.end(), pred );
+    size_t removed = v.end() - new_end;
+    v.erase( new_end, v.end() );
+    return removed;
   }
 
   // As before, a const vector hands out mutable iterators; the elements are not treated as part of its constness.
@@ -641,6 +653,17 @@ public:
   void swap( MVKSmallVectorImpl &a ) noexcept
   {
     alc.swap( a.alc );
+  }
+
+  // Removes the elements that satisfy the predicate, and returns how many were removed.
+  // Found by argument-dependent lookup, like std::erase_if() for the standard containers.
+  template<class Pred>
+  friend size_t erase_if( MVKSmallVectorImpl &v, Pred pred )
+  {
+    auto new_end = std::remove_if( v.begin(), v.end(), pred );
+    size_t removed = v.end() - new_end;
+    v.erase( new_end, v.end() );
+    return removed;
   }
 
   // As before, a const vector hands out mutable iterators; the elements are not treated as part of its constness.

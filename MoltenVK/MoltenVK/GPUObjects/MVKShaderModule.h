@@ -278,9 +278,7 @@ typedef struct MVKShaderModuleKey {
 	std::size_t codeSize;
 	std::size_t codeHash;
 
-	bool operator==(const MVKShaderModuleKey& rhs) const {
-		return ((codeSize == rhs.codeSize) && (codeHash == rhs.codeHash));
-	}
+	auto operator<=>(const MVKShaderModuleKey&) const = default;		// Also provides operator==().
 	MVKShaderModuleKey(std::size_t codeSize, std::size_t codeHash) : codeSize(codeSize), codeHash(codeHash) {}
 	MVKShaderModuleKey() :  MVKShaderModuleKey(0, 0) {}
 } MVKShaderModuleKey;
@@ -364,11 +362,7 @@ protected:
 		spv::ExecutionModel model;
 		spv::StorageClass storage;
 		std::string entryName;
-		bool operator<(const InterfaceReflectionKey& o) const {
-			if (model != o.model) { return model < o.model; }
-			if (storage != o.storage) { return storage < o.storage; }
-			return entryName < o.entryName;
-		}
+		auto operator<=>(const InterfaceReflectionKey&) const = default;
 	};
 	struct InterfaceReflection {
 		std::vector<mvk::SPIRVShaderInterfaceVariable> vars;
@@ -379,12 +373,7 @@ protected:
 		std::string tescEntryName;
 		MVKShaderModuleKey teseKey;
 		std::string teseEntryName;
-		bool operator<(const TessReflectionKey& o) const {
-			if (tescEntryName != o.tescEntryName) { return tescEntryName < o.tescEntryName; }
-			if (teseKey.codeHash != o.teseKey.codeHash) { return teseKey.codeHash < o.teseKey.codeHash; }
-			if (teseKey.codeSize != o.teseKey.codeSize) { return teseKey.codeSize < o.teseKey.codeSize; }
-			return teseEntryName < o.teseEntryName;
-		}
+		auto operator<=>(const TessReflectionKey&) const = default;
 	};
 	struct TessReflection {
 		mvk::SPIRVTessReflectionData data;

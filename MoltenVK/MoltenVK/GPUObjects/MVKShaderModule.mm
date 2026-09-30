@@ -900,7 +900,7 @@ NSNumber *MVKShaderLibraryCompiler::getMacroValue(const MSLSpecializationMacroIn
 
 void MVKShaderLibraryCompiler::handleError() {
 	if (_mtlLibrary) {
-		MVKLogInfo("%s compilation succeeded with warnings (Error code %li):\n%s", _compilerType.c_str(),
+		MVKLogInfo("%s compilation succeeded with warnings (Error code %li):\n%s", _compilerType,
 				   (long)_compileError.code, _compileError.localizedDescription.UTF8String);
 	} else {
 		MVKMetalCompiler::handleError();

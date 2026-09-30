@@ -282,7 +282,7 @@ void MVKCommandBuffer::checkDeferredEncoding() {
 }
 
 void MVKCommandBuffer::addCommand(MVKCommand* command) {
-    if ( !_canAcceptCommands ) {
+    if ( !_canAcceptCommands ) [[unlikely]] {
         setConfigurationResult(reportError(VK_NOT_READY, "Command buffer cannot accept commands before vkBeginCommandBuffer() is called."));
         return;
     }
@@ -608,7 +608,7 @@ void MVKCommandEncoder::endMetalEncoding(T& mtlEnc) {
 	mtlEnc = nil;
 }
 
-static MVKBarrierStage commandUseToBarrierStage(MVKCommandUse use) {
+static constexpr MVKBarrierStage commandUseToBarrierStage(MVKCommandUse use) {
 	switch (use) {
 	case kMVKCommandUseNone:                         return kMVKBarrierStageNone; /**< No use defined. */
 	case kMVKCommandUseBeginCommandBuffer:           return kMVKBarrierStageNone; /**< vkBeginCommandBuffer (prefilled VkCommandBuffer). */
@@ -988,10 +988,11 @@ void MVKCommandEncoder::clearRenderArea(MVKCommandUse cmdUse) {
 	if (clearAttCnt == 0) { return; }
 
 	if (!getSubpass()->isMultiview()) {
-		VkClearRect clearRect;
-		clearRect.rect = _renderArea;
-		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = getFramebufferLayerCount();
+		VkClearRect clearRect = {
+			.rect = _renderArea,
+			.baseArrayLayer = 0,
+			.layerCount = getFramebufferLayerCount(),
+		};
 
 		// Create and execute a temporary clear attachments command.
 		// To be threadsafe...do NOT acquire and return the command from the pool.
@@ -1078,7 +1079,7 @@ void MVKCommandEncoder::endCurrentMetalEncoding() {
 	encodeTimestampStageCounterSamples();
 }
 
-static MTLDispatchType getDispatchType(MVKCommandUse use) {
+static constexpr MTLDispatchType getDispatchType(MVKCommandUse use) {
 	switch (use) {
 		case kMVKCommandUseAccumOcclusionQuery:
 			return MTLDispatchTypeConcurrent;
@@ -1087,7 +1088,7 @@ static MTLDispatchType getDispatchType(MVKCommandUse use) {
 	}
 }
 
-static bool wantsSeparateComputeEncoder(MVKCommandUse use) {
+static constexpr bool wantsSeparateComputeEncoder(MVKCommandUse use) {
 	switch (use) {
 		case kMVKCommandUseAccumOcclusionQuery:
 			return true;
@@ -1096,7 +1097,7 @@ static bool wantsSeparateComputeEncoder(MVKCommandUse use) {
 	}
 }
 
-static bool shouldStartNewEncoder(MVKCommandUse prev, MVKCommandUse next) {
+static constexpr bool shouldStartNewEncoder(MVKCommandUse prev, MVKCommandUse next) {
 	if (prev == next)
 		return false;
 	if (getDispatchType(prev) != getDispatchType(next))

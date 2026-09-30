@@ -48,16 +48,7 @@ typedef struct MVKRPSKeyBlitImg {
 
 	MVKRPSKeyBlitImg() : srcMTLPixelFormat(0), dstMTLPixelFormat(0), srcMTLTextureType(0), srcFilter(0) {}
 
-	bool operator==(const MVKRPSKeyBlitImg& rhs) const {
-		if (srcMTLPixelFormat != rhs.srcMTLPixelFormat) { return false; }
-		if (dstMTLPixelFormat != rhs.dstMTLPixelFormat) { return false; }
-		if (srcMTLTextureType != rhs.srcMTLTextureType) { return false; }
-		if (srcFilter != rhs.srcFilter) { return false; }
-		if (srcAspect != rhs.srcAspect) { return false; }
-		if (dstSampleCount != rhs.dstSampleCount) { return false; }
-		if (srcSwizzle != rhs.srcSwizzle) { return false; }
-		return true;
-	}
+	bool operator==(const MVKRPSKeyBlitImg&) const = default;
 
 	inline MTLPixelFormat getSrcMTLPixelFormat() { return (MTLPixelFormat)srcMTLPixelFormat; }
 
@@ -113,11 +104,11 @@ namespace std {
 #pragma mark -
 #pragma mark MVKRPSKeyClearAtt
 
-const static uint32_t kMVKClearColorAttachmentCount = kMVKMaxColorAttachmentCount;
-const static uint32_t kMVKClearAttachmentDepthIndex = kMVKClearColorAttachmentCount;
-const static uint32_t kMVKClearAttachmentStencilIndex = kMVKClearAttachmentDepthIndex + 1;
-const static uint32_t kMVKClearAttachmentCount = kMVKClearAttachmentStencilIndex + 1;
-const static uint32_t kMVKClearAttachmentLayeredRenderingBitIndex = kMVKClearAttachmentStencilIndex + 1;
+static constexpr uint32_t kMVKClearColorAttachmentCount = kMVKMaxColorAttachmentCount;
+static constexpr uint32_t kMVKClearAttachmentDepthIndex = kMVKClearColorAttachmentCount;
+static constexpr uint32_t kMVKClearAttachmentStencilIndex = kMVKClearAttachmentDepthIndex + 1;
+static constexpr uint32_t kMVKClearAttachmentCount = kMVKClearAttachmentStencilIndex + 1;
+static constexpr uint32_t kMVKClearAttachmentLayeredRenderingBitIndex = kMVKClearAttachmentStencilIndex + 1;
 
 /**
  * Key to use for looking up cached MTLRenderPipelineState instances.
@@ -132,7 +123,7 @@ typedef struct MVKRPSKeyClearAtt {
 	uint16_t mtlSampleCount;
 	uint16_t attachmentMTLPixelFormats[kMVKClearAttachmentCount];
 
-    const static uint32_t bitFlag = 1;
+    static constexpr uint32_t bitFlag = 1;
 
     void enableAttachment(uint32_t attIdx) { mvkEnableFlags(flags, bitFlag << attIdx); }
 
@@ -263,9 +254,7 @@ typedef struct MVKQuerySpec {
 	inline void set(MVKQueryPool* qryPool, uint32_t qry) { queryPool = qryPool; query = qry; }
 	inline void reset() { set(nullptr, 0); }
 
-	bool operator==(const MVKQuerySpec& rhs) const {
-		return (queryPool == rhs.queryPool) && (query == rhs.query);
-	}
+	bool operator==(const MVKQuerySpec&) const = default;
 
 	std::size_t hash() const { return (size_t)queryPool ^ query; }
 

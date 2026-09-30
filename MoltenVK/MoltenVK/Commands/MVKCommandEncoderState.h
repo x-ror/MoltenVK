@@ -25,6 +25,7 @@
 #include "MVKSmallVector.h"
 #include "MVKBitArray.h"
 #include "MVKPointerMap.h"
+#include <concepts>
 #include <unordered_map>
 #include <objc/message.h>
 
@@ -209,10 +210,8 @@ struct MVKVulkanGraphicsCommandEncoderState: public MVKVulkanCommonEncoderState 
 	/** Bind the given descriptor sets, placing their bindings into `_descriptorSetBindings`. */
 	void bindDescriptorSets(MVKPipelineLayout* layout,
 	                        uint32_t firstSet,
-	                        uint32_t setCount,
-	                        MVKDescriptorSet*const* sets,
-	                        uint32_t dynamicOffsetCount,
-	                        const uint32_t* dynamicOffsets);
+	                        MVKArrayRef<MVKDescriptorSet*const> sets,
+	                        MVKArrayRef<const uint32_t> dynamicOffsets);
 };
 
 /** Tracks the state of a Vulkan compute encoder. */
@@ -223,10 +222,8 @@ struct MVKVulkanComputeCommandEncoderState: public MVKVulkanCommonEncoderState {
 	/** Bind the given descriptor sets, placing their bindings into `_descriptorSetBindings`. */
 	void bindDescriptorSets(MVKPipelineLayout* layout,
 	                        uint32_t firstSet,
-	                        uint32_t setCount,
-	                        MVKDescriptorSet*const* sets,
-	                        uint32_t dynamicOffsetCount,
-	                        const uint32_t* dynamicOffsets);
+	                        MVKArrayRef<MVKDescriptorSet*const> sets,
+	                        MVKArrayRef<const uint32_t> dynamicOffsets);
 };
 
 struct MVKMetalSharedCommandEncoderState {
@@ -252,8 +249,7 @@ struct MVKStageResourceBindings {
 	struct Buffer {
 		id<MTLBuffer> buffer;
 		VkDeviceSize offset;
-		bool operator==(Buffer other) const { return std::make_pair(buffer, offset) == std::make_pair(other.buffer, other.offset); }
-		bool operator!=(Buffer other) const { return !(*this == other); }
+		bool operator==(const Buffer&) const = default;		// Also provides operator!=().
 	} buffers[kMVKMaxBufferCount];
 	id<MTLSamplerState> samplers[kMVKMaxSamplerCount];
 	MVKBitArray descriptorSetResourceUse[kMVKMaxDescriptorSetCount];
@@ -432,6 +428,11 @@ struct MVKMetalComputeCommandEncoderState {
 #pragma mark - MVKCommandEncoderState
 
 /** Holds both Metal and Vulkan state for both compute and graphics. */
+/** A callable that can be applied to either the graphics or the compute Metal encoder state. */
+template <typename Fn>
+concept MVKMTLStateFunction = std::invocable<Fn, MVKMetalGraphicsCommandEncoderState&> &&
+                              std::invocable<Fn, MVKMetalComputeCommandEncoderState&>;
+
 class MVKCommandEncoderState {
 	MVKVulkanSharedCommandEncoderState   _vkShared;
 	MVKVulkanGraphicsCommandEncoderState _vkGraphics;
@@ -503,12 +504,10 @@ public:
 	void bindDescriptorSets(VkPipelineBindPoint bindPoint,
 	                        MVKPipelineLayout* layout,
 	                        uint32_t firstSet,
-	                        uint32_t setCount,
-	                        MVKDescriptorSet*const* sets,
-	                        uint32_t dynamicOffsetCount,
-	                        const uint32_t* dynamicOffsets);
+	                        MVKArrayRef<MVKDescriptorSet*const> sets,
+	                        MVKArrayRef<const uint32_t> dynamicOffsets);
 	/** Applies the given descriptor set writes to the push descriptor set on bindPoint. */
-	void pushDescriptorSet(VkPipelineBindPoint bindPoint, MVKPipelineLayout* layout, uint32_t set, uint32_t writeCount, const VkWriteDescriptorSet* writes);
+	void pushDescriptorSet(VkPipelineBindPoint bindPoint, MVKPipelineLayout* layout, uint32_t set, MVKArrayRef<const VkWriteDescriptorSet> writes);
 	/** Applies the given descriptor update template to the push descriptor to its specified bindPoint. */
 	void pushDescriptorSet(MVKDescriptorUpdateTemplate* updateTemplate, MVKPipelineLayout* layout, uint32_t set, const void* data);
 	/** Binds the given vertex buffers to the Vulkan state, invalidating any necessary resources. */
@@ -526,7 +525,7 @@ public:
 	 * Calls the given function on either the Metal graphics or compute state tracker, whichever one is active (or neither if neither is active).
 	 * `bindPoint` can be used to only call the function if the given Vulkan pipeline is being encoded to the active encoder.
 	 */
-	template <typename Fn>
+	template <MVKMTLStateFunction Fn>
 	void applyToActiveMTLState(VkPipelineBindPoint bindPoint, Fn&& fn);
 };
 

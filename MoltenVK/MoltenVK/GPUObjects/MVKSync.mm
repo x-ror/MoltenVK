@@ -434,7 +434,7 @@ VkResult mvkWaitSemaphores(MVKDevice* device,
 // The thread dispatch is needed because even the sync portion of the async Metal compilation methods can take well
 // over a second to return when a compiler failure occurs!
 void MVKMetalCompiler::compile(unique_lock<mutex>& lock, dispatch_block_t block) {
-	MVKAssert( _startTime == 0, "%s compile occurred already in this instance. Instances of %s should only be used for a single compile activity.", _compilerType.c_str(), getClassName().c_str());
+	MVKAssert( _startTime == 0, "%s compile occurred already in this instance. Instances of %s should only be used for a single compile activity.", _compilerType, getClassName().c_str());
 
 	_startTime = getPerformanceTimestamp();
 
@@ -459,7 +459,7 @@ void MVKMetalCompiler::compile(unique_lock<mutex>& lock, dispatch_block_t block)
 void MVKMetalCompiler::handleError() {
 	_owner->setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED,
 											   "%s compile failed (Error code %li):\n%s.",
-											   _compilerType.c_str(), (long)_compileError.code,
+											   _compilerType, (long)_compileError.code,
 											   _compileError.localizedDescription.UTF8String));
 }
 

@@ -56,7 +56,7 @@ static uint32_t mvkGetMTLTextureIOSurfaceID(id<MTLTexture> tex) {
 MVKVulkanAPIObject* MVKImagePlane::getVulkanAPIObject() { return _image; }
 
 id<MTLTexture> MVKImagePlane::getMTLTexture() {
-    if ( !_mtlTexture && _image->_vkFormat ) {
+    if ( !_mtlTexture && _image->_vkFormat ) [[unlikely]] {
         // Lock and check again in case another thread has created the texture.
         lock_guard<MVKUnfairLock> lock(_image->_lock);
         if (_mtlTexture) { return _mtlTexture; }
@@ -1886,7 +1886,7 @@ id<MTLTexture> MVKImageViewPlane::getMTLTexture() {
             }
         }
 
-        if ( !_mtlTexture && _mtlPixFmt ) {
+        if ( !_mtlTexture && _mtlPixFmt ) [[unlikely]] {
 
             // Lock and check again in case another thread created the texture view
             lock_guard<MVKUnfairLock> lock(_imageView->_lock);

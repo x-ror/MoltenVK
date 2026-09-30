@@ -131,9 +131,7 @@ private:
 	struct IsInitializer<ManualAllocationInitializer> : public std::true_type {};
 
 	template <typename T>
-	static void AssertIsInitializer() {
-		static_assert(IsInitializer<T>::value);
-	}
+	static constexpr bool kIsInitializer = IsInitializer<T>::value;
 
 public:
 	/**
@@ -179,7 +177,7 @@ public:
 
 	template <typename Allocator, typename... Fields, typename... Args>
 	static Base* CreateWithAllocator(Allocator allocator, std::tuple<Fields...> fields, Args... args) {
-		(AssertIsInitializer<Fields>(), ...);
+		static_assert((kIsInitializer<Fields> && ...), "Every field must be an initializer created by this class.");
 		MVKInlineObjectConstructor constructor;
 		constructor.Allocate<Base>(1);
 		std::apply([&](auto&... field){ (field.Allocate(constructor), ...); }, fields);

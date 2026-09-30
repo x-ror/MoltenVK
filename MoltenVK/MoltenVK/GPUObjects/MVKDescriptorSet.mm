@@ -123,7 +123,7 @@ static constexpr uint32_t descriptorGPUBindingStride(MVKDescriptorGPULayout layo
 	}
 }
 
-static uint32_t descriptorGPUAlignMetal3(MVKDescriptorGPULayout layout) {
+static constexpr uint32_t descriptorGPUAlignMetal3(MVKDescriptorGPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorGPULayout::None:
 			return 1;
@@ -134,7 +134,7 @@ static uint32_t descriptorGPUAlignMetal3(MVKDescriptorGPULayout layout) {
 	}
 }
 
-static bool canUseImmutableSamplers(VkDescriptorType type) {
+static constexpr bool canUseImmutableSamplers(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_SAMPLER:
 		case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
@@ -144,11 +144,11 @@ static bool canUseImmutableSamplers(VkDescriptorType type) {
 	}
 }
 
-static bool needsDynamicOffset(VkDescriptorType type) {
+static constexpr bool needsDynamicOffset(VkDescriptorType type) {
 	return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
 }
 
-static bool needsAuxOffset(MVKDescriptorGPULayout layout) {
+static constexpr bool needsAuxOffset(MVKDescriptorGPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorGPULayout::BufferAuxSize:
 		case MVKDescriptorGPULayout::OutlinedData:
@@ -158,7 +158,7 @@ static bool needsAuxOffset(MVKDescriptorGPULayout layout) {
 	}
 }
 
-static bool needsAuxBuf(MVKDescriptorGPULayout layout) {
+static constexpr bool needsAuxBuf(MVKDescriptorGPULayout layout) {
 	return layout == MVKDescriptorGPULayout::BufferAuxSize;
 }
 

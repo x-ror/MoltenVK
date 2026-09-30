@@ -136,6 +136,15 @@ MVKMTLDeviceCapabilities::MVKMTLDeviceCapabilities(id<MTLDevice> mtlDev) {
 }
 
 
+// Stores the bytes of the value at the destination, which need not be aligned for the value's type.
+// Writing through a cast pointer into a byte array would violate strict aliasing.
+template <typename T>
+static void mvkStoreBytes(uint8_t* pDst, T value) {
+	static_assert(std::is_trivially_copyable_v<T>);
+	memcpy(pDst, &value, sizeof(value));
+}
+
+
 #pragma mark -
 #pragma mark MVKPhysicalDevice
 
@@ -1400,12 +1409,12 @@ void MVKPhysicalDevice::populateHostImageCopyProperties(HostImageCopyProps* pHos
 
 	// First 4 bytes contains GPU vendor ID.
 	// Use Big-Endian byte ordering, so a hex dump is human readable
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(_properties.vendorID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(_properties.vendorID));
 	uuidComponentOffset += sizeof(uint32_t);
 
 	// Next 4 bytes contains GPU device ID
 	// Use Big-Endian byte ordering, so a hex dump is human readable
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(_properties.deviceID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(_properties.deviceID));
 	uuidComponentOffset += sizeof(uint32_t);
 
 	// Next 4 bytes contains OS version
@@ -1436,17 +1445,17 @@ void MVKPhysicalDevice::populateDeviceIDProperties(VkPhysicalDeviceVulkan11Prope
 
 	// First 4 bytes contains GPU vendor ID
 	uint32_t vendorID = _properties.vendorID;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(vendorID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(vendorID));
 	uuidComponentOffset += sizeof(vendorID);
 
 	// Next 4 bytes contains GPU device ID
 	uint32_t deviceID = _properties.deviceID;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(deviceID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(deviceID));
 	uuidComponentOffset += sizeof(deviceID);
 
 	// Last 8 bytes contain the GPU location identifier
 	uint64_t locID = mvkGetLocationID(_mtlDevice);
-	*(uint64_t*)&uuid[uuidComponentOffset] = NSSwapHostLongLongToBig(locID);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostLongLongToBig(locID));
 	uuidComponentOffset += sizeof(locID);
 
 	// ---- Driver ID ----------------------------------------------
@@ -1462,16 +1471,16 @@ void MVKPhysicalDevice::populateDeviceIDProperties(VkPhysicalDeviceVulkan11Prope
 
 	// Next 4 bytes contains MoltenVK version
 	uint32_t mvkVersion = MVK_VERSION;
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(mvkVersion);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(mvkVersion));
 	uuidComponentOffset += sizeof(mvkVersion);
 
 	// Next 4 bytes contains highest GPU capability supported by this device
 	uint32_t gpuCap = getHighestGPUCapability();
-	*(uint32_t*)&uuid[uuidComponentOffset] = NSSwapHostIntToBig(gpuCap);
+	mvkStoreBytes(&uuid[uuidComponentOffset], NSSwapHostIntToBig(gpuCap));
 	uuidComponentOffset += sizeof(gpuCap);
 
 	// ---- Device LUID ------------------------
-	*(uint64_t*)pVk11Props->deviceLUID = NSSwapHostLongLongToBig(_mtlDevice.registryID);
+	mvkStoreBytes(pVk11Props->deviceLUID, NSSwapHostLongLongToBig(_mtlDevice.registryID));
 	pVk11Props->deviceNodeMask = 1;		// Per Vulkan spec
 	pVk11Props->deviceLUIDValid = VK_TRUE;
 }
@@ -3296,19 +3305,19 @@ void MVKPhysicalDevice::initPipelineCacheUUID() {
 	// This is captured either as the MoltenVK Git revision, or if that's not available, as the MoltenVK version.
 	uint32_t mvkRev = getMoltenVKGitRevision();
 	if ( !mvkRev ) { mvkRev = MVK_VERSION; }
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(mvkRev);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(mvkRev));
 	uuidComponentOffset += sizeof(mvkRev);
 
 	// Next 4 bytes contains highest GPU capability supported by this device
 	uint32_t gpuCap = getHighestGPUCapability();
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(gpuCap);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(gpuCap));
 	uuidComponentOffset += sizeof(gpuCap);
 
 	// Next 4 bytes contains flags based on enabled Metal features that
 	// might affect the contents of the pipeline cache (mostly MSL content).
 	uint32_t mtlFeatures = 0;
 	mtlFeatures |= _isUsingMetalArgumentBuffers << 0;
-	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(mtlFeatures);
+	mvkStoreBytes(&_properties.pipelineCacheUUID[uuidComponentOffset], NSSwapHostIntToBig(mtlFeatures));
 	uuidComponentOffset += sizeof(mtlFeatures);
 }
 
@@ -4959,7 +4968,7 @@ void MVKDevice::returnVisibilityBuffer(MVKVisibilityBuffer&& buffer) {
 }
 
 id<MTLSamplerState> MVKDevice::getDefaultMTLSamplerState() {
-	if ( !_defaultMTLSamplerState ) {
+	if ( !_defaultMTLSamplerState ) [[unlikely]] {
 
 		// Lock and check again in case another thread has created the sampler.
 		lock_guard<mutex> lock(_rezLock);

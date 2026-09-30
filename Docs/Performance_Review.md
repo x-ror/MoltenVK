@@ -316,6 +316,18 @@ its own section.
 
 ## 5. C++20 features worth adopting
 
+**Status:** implemented on this branch, with these scope notes. `std::span`/`MVKArrayRef` is
+adopted for the encoder-state descriptor binding and push descriptor functions, whose callers
+already hold containers; the fence, queue, extension and timestamp functions stay as they are,
+because each is a thin wrapper with one caller passing Vulkan's own count and pointer through.
+For `std::bit_cast`, the UUID writes were real strict-aliasing violations and now store bytes
+with `memcpy`; the two reads in `MVKCommandEncoderState.mm` go through pointers to objects of
+the right type and are well-defined, so they stay. `mvkAreEqual` keeps its `constexpr`, since
+removing it could break `constexpr` callers. Not done: designated initializers for the constant
+subsets of `supportedProps12/13/14`, a larger restructuring of device property setup.
+Converting `mvk::trim()` to `std::string_view` found that it kept trailing whitespace whenever
+the string also had leading whitespace; that is fixed.
+
 The project already compiles as C++20 and uses `requires`, `std::span` (3 sites),
 `std::popcount`/`std::countr_zero` (3 sites), `[[likely]]` (6 sites) and designated
 initializers (a few). The list below names the concrete places where each feature pays for

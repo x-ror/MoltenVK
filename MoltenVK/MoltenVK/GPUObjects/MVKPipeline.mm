@@ -64,7 +64,7 @@ static MVKDescriptorGPULayout getBindingLayout(const MVKDescriptorBinding& bindi
 	}
 }
 
-static spv::ExecutionModel spvExecModelForStage(MVKShaderStage stage) {
+static constexpr spv::ExecutionModel spvExecModelForStage(MVKShaderStage stage) {
 	switch (stage) {
 		case kMVKShaderStageVertex:   return spv::ExecutionModelVertex;
 		case kMVKShaderStageTessCtl:  return spv::ExecutionModelTessellationControl;
@@ -225,7 +225,7 @@ void MVKPipelineLayout::populateShaderConversionConfig(SPIRVToMSLConversionConfi
 	}
 }
 
-static bool hasDynamicBuffer(VkDescriptorType type) {
+static constexpr bool hasDynamicBuffer(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
 		case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
@@ -235,7 +235,7 @@ static bool hasDynamicBuffer(VkDescriptorType type) {
 	}
 }
 
-static bool hasBuffer(MVKDescriptorGPULayout layout) {
+static constexpr bool hasBuffer(MVKDescriptorGPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorGPULayout::Buffer:
 		case MVKDescriptorGPULayout::BufferAuxSize:
@@ -246,7 +246,7 @@ static bool hasBuffer(MVKDescriptorGPULayout layout) {
 	}
 }
 
-static bool isWriteable(VkDescriptorType type) {
+static constexpr bool isWriteable(VkDescriptorType type) {
 	switch (type) {
 		case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
 		case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
@@ -682,7 +682,7 @@ static void loadStencil(MVKMTLStencilDescriptorData& mtl, const VkStencilOpState
 	mtl.op.depthStencilPassOperation = mvkMTLStencilOperationFromVkStencilOp(vk.passOp);
 }
 
-static bool usesConstantColor(VkBlendFactor factor) {
+static constexpr bool usesConstantColor(VkBlendFactor factor) {
 	switch (factor) {
 		case VK_BLEND_FACTOR_CONSTANT_COLOR:
 		case VK_BLEND_FACTOR_CONSTANT_ALPHA:
@@ -1233,9 +1233,9 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessVertexStageDescript
 
 	// Filter out anything but builtins. We couldn't do this before because we needed to make sure
 	// locations were assigned correctly.
-	tcInputs.erase(std::remove_if(tcInputs.begin(), tcInputs.end(), [](const SPIRVShaderInterfaceVariable& var) {
+	erase_if(tcInputs, [](const SPIRVShaderInterfaceVariable& var) {
 		return var.builtin != spv::BuiltInPosition && var.builtin != spv::BuiltInPointSize && var.builtin != spv::BuiltInClipDistance && var.builtin != spv::BuiltInCullDistance;
-	}), tcInputs.end());
+	});
 
 	// Add shader stages.
 	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, tcInputs, pVertexSS, pVertexFB, pVtxFunctions)) { return nil; }
@@ -1325,9 +1325,9 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessControlStageDescrip
 
 	// Filter out anything but builtins. We couldn't do this before because we needed to make sure
 	// locations were assigned correctly.
-	teInputs.erase(std::remove_if(teInputs.begin(), teInputs.end(), [](const SPIRVShaderInterfaceVariable& var) {
+	erase_if(teInputs, [](const SPIRVShaderInterfaceVariable& var) {
 		return var.builtin != spv::BuiltInPosition && var.builtin != spv::BuiltInPointSize && var.builtin != spv::BuiltInClipDistance && var.builtin != spv::BuiltInCullDistance;
-	}), teInputs.end());
+	});
 
 	// Add shader stages.
 	if (!addTessCtlShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, teInputs, pTessCtlSS, pTessCtlFB)) {

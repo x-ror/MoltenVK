@@ -90,7 +90,7 @@ public:
 	 */
 	T* acquireObject() {
 		T* obj = nullptr;
-		if (_isPooling) { obj = nextObject(); }
+		if (_isPooling) [[likely]] { obj = nextObject(); }
 		if ( !obj ) {
 			obj = newObject();
 			_counts.created++;

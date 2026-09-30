@@ -572,7 +572,7 @@ protected:
 	bool _isDestroyed = false;
 	std::mutex _completionLock;
 	std::condition_variable _blocker;
-	std::string _compilerType = "Unknown";
+	const char* _compilerType = "Unknown";		// Always a string literal.
 	MVKPerformanceTracker* _pPerformanceTracker = nullptr;
 };
 

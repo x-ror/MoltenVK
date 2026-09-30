@@ -171,7 +171,7 @@ void MVKCmdDraw::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 
 void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
-	if (_vertexCount == 0 || _instanceCount == 0) { return; }	// Nothing to do.
+	if (_vertexCount == 0 || _instanceCount == 0) [[unlikely]] { return; }	// Nothing to do.
 
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 
@@ -180,7 +180,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
 
 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) [[unlikely]] {
 		encodeIndexedIndirect(cmdEncoder);
 		return;
 	}
@@ -207,7 +207,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
         auto stage = MVKGraphicsStage(s);
         cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
-		if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
+		if ( !pipeline->hasValidMTLPipelineStates() ) [[unlikely]] { return; }	// Abort if this pipeline stage could not be compiled.
 
 		id<MTLComputeCommandEncoder> mtlTessCtlEncoder = nil;
 
@@ -439,7 +439,7 @@ static const MVKMTLBufferAllocation* convertUint8IndexBuffer(MVKCommandEncoder* 
 
 void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 
-	if (_indexCount == 0 || _instanceCount == 0) { return; }	// Nothing to do.
+	if (_indexCount == 0 || _instanceCount == 0) [[unlikely]] { return; }	// Nothing to do.
 
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 
@@ -448,7 +448,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
 
 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) [[unlikely]] {
 		encodeIndexedIndirect(cmdEncoder);
 		return;
 	}
@@ -486,7 +486,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
         id<MTLComputeCommandEncoder> mtlTessCtlEncoder = nil;
         cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
-		if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
+		if ( !pipeline->hasValidMTLPipelineStates() ) [[unlikely]] { return; }	// Abort if this pipeline stage could not be compiled.
 
         switch (stage) {
             case kMVKGraphicsStageVertex: {
@@ -633,7 +633,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 // there are at encoding time. And this will probably be inadequate for large instanced draws.
 // TODO: Consider breaking up such draws using different base instance values. But this will
 // require yet more munging of the indirect buffers...
-static const uint32_t kMVKMaxDrawIndirectVertexCount = 1024 * KIBI;
+static constexpr uint32_t kMVKMaxDrawIndirectVertexCount = 1024 * KIBI;
 
 static const MVKMTLBufferAllocation* encodeIndirectCountConversion(
 		MVKCommandEncoder* cmdEncoder,
@@ -877,7 +877,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 	auto& mtlFeats = cmdEncoder->getMetalFeatures();
 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
 	// Metal doesn't support triangle fans, so encode it as indexed indirect triangles instead.
-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) [[unlikely]] {
 		encodeIndexedIndirect(cmdEncoder, indirectBuffer, indirectBufferOffset, indirectBufferStride);
 		return;
 	}
@@ -1028,7 +1028,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
                 cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
             }
 
-			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
+			if ( !pipeline->hasValidMTLPipelineStates() ) [[unlikely]] { return; }	// Abort if this pipeline stage could not be compiled.
 
             switch (stage) {
                 case kMVKGraphicsStageVertex:
@@ -1143,7 +1143,7 @@ typedef struct MVKVertexAdjustments {
 	bool isUint8Index = false;
 	bool isProvokingVertexLast = false;
 
-	bool needsAdjustment() { return isMultiView || isTriangleFan; }
+	constexpr bool needsAdjustment() const { return isMultiView || isTriangleFan; }
 } MVKVertexAdjustments;
 
 VkResult MVKCmdDrawIndexedIndirect::setContent(MVKCommandBuffer* cmdBuff,
@@ -1413,7 +1413,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
 			if (drawIdx == 0 || pipeline->isTessellationPipeline() || vtxAdjmts.needsAdjustment()) {
 				cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 			}
-			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
+			if ( !pipeline->hasValidMTLPipelineStates() ) [[unlikely]] { return; }	// Abort if this pipeline stage could not be compiled.
 
             switch (stage) {
                 case kMVKGraphicsStageVertex:
