@@ -514,7 +514,8 @@ protected:
 										   MVKShaderModule* shaderModule,
 										   MVKPipeline* pipeline,
 										   VkPipelineCreationFeedback* pShaderFeedback,
-										   uint64_t startTime);
+										   uint64_t startTime,
+										   std::unique_lock<std::mutex>* pCacheLock);
 	VkResult writeDataImpl(size_t* pDataSize, void* pData);
 	VkResult mergePipelineCachesImpl(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches);
 	void markDirty();

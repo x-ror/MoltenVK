@@ -73,109 +73,200 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 												VkPipelineCreationFeedback* pShaderFeedback,
 												MVKShaderModule* shaderModule) {
 
+	ensureCompiled();
 	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
 
-	id<MTLLibrary> lib = _mtlLibrary;
-
-	// If specialization happens on constants mapped to macro, find or compile a library variant
-	// with proper macro definition instead of the "generic" library
+	// If specialization happens on constants mapped to macros, the function comes from a library
+	// variant compiled with the matching macro definitions, which then caches its own functions.
 	if (pSpecializationInfo && _maySpecializeWithMacro) {
-		// Create the list of macro-value mapping
-		vector<pair<uint32_t, MVKShaderMacroValue>> spec_list;
-		for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
-			const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
-			uint32_t const_id = pMapEntry->constantID;
-			MVKShaderMacroValue macro_value = {};
-			size_t size = min(pMapEntry->size, sizeof(macro_value.value));
-
-			memcpy(&macro_value.value, (char *)pSpecializationInfo->pData + pMapEntry->offset, size);
-			macro_value.size = size;
-			if (_shaderConversionResultInfo.specializationMacros.find(const_id) != _shaderConversionResultInfo.specializationMacros.end()) {
-				spec_list.push_back(make_pair(const_id, macro_value));
-			}
-		}
-
-		if (!spec_list.empty()) {
-			// Sort the specialization list before it is used as a key to index the variants
-			std::sort(spec_list.begin(), spec_list.end());
-			auto entry = _specializationVariants.find(spec_list);
-			if (entry != _specializationVariants.end()) {
-				lib = entry->second->_mtlLibrary;
-			} else {
-				MVKShaderLibrary *new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, _compressedMSL, &spec_list);
-				_specializationVariants[spec_list] = new_mvklib;
-				lib = new_mvklib->_mtlLibrary;
-			}
-		}
+		MVKShaderLibrary* variant = getMacroSpecializedVariant(pSpecializationInfo);
+		if (variant) { return variant->getMTLFunction(pSpecializationInfo, pShaderFeedback, shaderModule); }
 	}
 
+	@autoreleasepool {
+		id<MTLFunction> mtlFunc = getSpecializedMTLFunction(pSpecializationInfo, pShaderFeedback, shaderModule);
+		if (mtlFunc && pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 
-	@synchronized (getMTLDevice()) {
-		@autoreleasepool {
-			NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
-
-			uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
-			id<MTLFunction> mtlFunc = [[lib newFunctionWithName: mtlFuncName] autorelease];
-			addPerformanceInterval(getPerformanceStats().shaderCompilation.functionRetrieval, startTime);
-			if (pShaderFeedback) {
-				if (mtlFunc) {
-					mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT);
-				}
-				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
-			}
-
-			if (mtlFunc) {
-				// If the Metal function expects to be specialized, populate Metal function constant values from
-				// the Vulkan specialization info, and compile a specialized Metal function, otherwise simply use
-				// the unspecialized Metal function.
-				NSArray<MTLFunctionConstant*>* mtlFCs = mtlFunc.functionConstantsDictionary.allValues;
-				if (mtlFCs.count > 0) {
-					// The Metal shader contains function constants and expects to be specialized.
-					// Populate the Metal function constant values from the Vulkan specialization info.
-					MTLFunctionConstantValues* mtlFCVals = [[MTLFunctionConstantValues new] autorelease];
-					if (pSpecializationInfo) {
-						// Iterate through the provided Vulkan specialization entries, and populate the
-						// Metal function constant value that matches the Vulkan specialization constantID.
-						for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
-							const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
-							for (MTLFunctionConstant* mfc in mtlFCs) {
-								if (mfc.index == pMapEntry->constantID) {
-									[mtlFCVals setConstantValue: ((char*)pSpecializationInfo->pData + pMapEntry->offset)
-														   type: mfc.type
-														atIndex: mfc.index];
-									break;
-								}
-							}
-						}
-					}
-
-					// Compile the specialized Metal function, and use it instead of the unspecialized Metal function.
-					MVKFunctionSpecializer fs(_owner);
-					if (pShaderFeedback) {
-						startTime = mvkGetTimestamp();
-					}
-					mtlFunc = [fs.newMTLFunction(lib, mtlFuncName, mtlFCVals) autorelease];
-					if (pShaderFeedback) {
-						pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
-					}
-				}
-			}
-
-			// Set the debug name. First try name of shader module, otherwise try name of owner.
-			NSString* dbName = shaderModule->getDebugName();
-			if ( !dbName ) { dbName = _owner->getDebugName(); }
-			_owner->setMetalObjectLabel(mtlFunc, dbName);
-
-			auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
-			return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
-																					getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
-																					getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo)));
-		}
+		auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
+		return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
+																				getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
+																				getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo)));
 	}
 }
 
+// Returns the library variant compiled with the macro definitions matching the specialization info,
+// creating it if needed, or nullptr if the specialization info specializes no macro constants.
+MVKShaderLibrary* MVKShaderLibrary::getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo) {
+	vector<pair<uint32_t, MVKShaderMacroValue>> spec_list;
+	for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
+		const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
+		uint32_t const_id = pMapEntry->constantID;
+		MVKShaderMacroValue macro_value = {};
+		size_t size = min(pMapEntry->size, sizeof(macro_value.value));
+
+		memcpy(&macro_value.value, (char *)pSpecializationInfo->pData + pMapEntry->offset, size);
+		macro_value.size = size;
+		if (_shaderConversionResultInfo.specializationMacros.find(const_id) != _shaderConversionResultInfo.specializationMacros.end()) {
+			spec_list.push_back(make_pair(const_id, macro_value));
+		}
+	}
+	if (spec_list.empty()) { return nullptr; }
+
+	// Sort the specialization list before it is used as a key to index the variants.
+	// Pipelines sharing this library may be created concurrently, so guard the variant map.
+	std::sort(spec_list.begin(), spec_list.end());
+	lock_guard<mutex> lock(_variantsLock);
+	auto entry = _specializationVariants.find(spec_list);
+	if (entry != _specializationVariants.end()) { return entry->second; }
+
+	MVKShaderLibrary* new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, _compressedMSL, &spec_list);
+	_specializationVariants[spec_list] = new_mvklib;
+	return new_mvklib;
+}
+
+// Retrieves the unspecialized entry point function and its function constants once.
+// Returns whether the function exists. Must be called with _functionsLock held.
+bool MVKShaderLibrary::ensureBaseMTLFunction(VkPipelineCreationFeedback* pShaderFeedback, MVKShaderModule* shaderModule) {
+	if (_isBaseMTLFunctionRetrieved) { return _baseMTLFunction != nil; }
+	_isBaseMTLFunctionRetrieved = true;
+
+	@autoreleasepool {
+		NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
+		uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
+		@synchronized (getMTLDevice()) {
+			_baseMTLFunction = [_mtlLibrary newFunctionWithName: mtlFuncName];							// retained
+			_mtlFunctionConstants = [_baseMTLFunction.functionConstantsDictionary.allValues retain];	// retained
+		}
+		addPerformanceInterval(getPerformanceStats().shaderCompilation.functionRetrieval, startTime);
+		if (pShaderFeedback) {
+			pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+		}
+
+		// Set the debug name. First try name of shader module, otherwise try name of owner.
+		NSString* dbName = shaderModule->getDebugName();
+		if ( !dbName ) { dbName = _owner->getDebugName(); }
+		_owner->setMetalObjectLabel(_baseMTLFunction, dbName);
+	}
+	return _baseMTLFunction != nil;
+}
+
+// Returns the entry point function, specialized with the function constant values from the
+// specialization info if the shader has function constants. Functions are cached by the
+// constant values, so pipelines with equal specialization share one compiled function.
+// The returned function is owned by this library.
+id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
+															VkPipelineCreationFeedback* pShaderFeedback,
+															MVKShaderModule* shaderModule) {
+	// Collect the specialization entries that correspond to function constants of this shader,
+	// and build the cache key from their IDs and values, in constant ID order.
+	struct SpecEntry { uint32_t constantID; const char* pData; uint32_t size; MTLDataType type; };
+	vector<SpecEntry> specEntries;
+	vector<uint8_t> key;
+
+	// Functions are returned retained and autoreleased while the lock is held, so that clearing
+	// the function cache on another thread cannot release a function before the caller retains it.
+	unique_lock<mutex> lock(_functionsLock);
+	if ( !ensureBaseMTLFunction(pShaderFeedback, shaderModule) ) { return nil; }
+	if (_mtlFunctionConstants.count == 0) { return [[_baseMTLFunction retain] autorelease]; }
+	string funcName = _shaderConversionResultInfo.entryPoint.mtlFunctionName;
+
+	if (pSpecializationInfo) {
+		specEntries.reserve(pSpecializationInfo->mapEntryCount);
+		for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
+			const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
+			for (MTLFunctionConstant* mfc in _mtlFunctionConstants) {
+				if (mfc.index == pMapEntry->constantID) {
+					specEntries.push_back({ pMapEntry->constantID,
+											(const char*)pSpecializationInfo->pData + pMapEntry->offset,
+											(uint32_t)pMapEntry->size,
+											mfc.type });
+					break;
+				}
+			}
+		}
+		std::sort(specEntries.begin(), specEntries.end(), [](const SpecEntry& a, const SpecEntry& b) { return a.constantID < b.constantID; });
+		for (auto& se : specEntries) {
+			const uint8_t* pID = (const uint8_t*)&se.constantID;
+			const uint8_t* pSize = (const uint8_t*)&se.size;
+			key.insert(key.end(), pID, pID + sizeof(se.constantID));
+			key.insert(key.end(), pSize, pSize + sizeof(se.size));
+			key.insert(key.end(), (const uint8_t*)se.pData, (const uint8_t*)se.pData + se.size);
+		}
+	}
+
+	auto cached = _specializedMTLFunctions.find(key);
+	if (cached != _specializedMTLFunctions.end()) { return [[cached->second retain] autorelease]; }
+
+	// Compile the specialized function with the lock released, so that other pipelines
+	// can retrieve functions from this library meanwhile.
+	lock.unlock();
+	id<MTLFunction> mtlFunc = nil;
+	@autoreleasepool {
+		MTLFunctionConstantValues* mtlFCVals = [[MTLFunctionConstantValues new] autorelease];
+		for (auto& se : specEntries) {
+			[mtlFCVals setConstantValue: se.pData type: se.type atIndex: se.constantID];
+		}
+
+		NSString* mtlFuncName = @(funcName.c_str());
+		uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : 0;
+		MVKFunctionSpecializer fs(_owner);
+		mtlFunc = fs.newMTLFunction(_mtlLibrary, mtlFuncName, mtlFCVals);		// retained
+		if (pShaderFeedback) {
+			pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+		}
+
+		NSString* dbName = shaderModule->getDebugName();
+		if ( !dbName ) { dbName = _owner->getDebugName(); }
+		_owner->setMetalObjectLabel(mtlFunc, dbName);
+	}
+	lock.lock();
+
+	// Don't cache a failed specialization, which may have been a transient compiler timeout.
+	if ( !mtlFunc ) { return nil; }
+
+	// If the entry point changed while the lock was released, the function is still correct for
+	// this request, but belongs to a stale cache generation, so return it without caching it.
+	if (funcName != _shaderConversionResultInfo.entryPoint.mtlFunctionName) { return [mtlFunc autorelease]; }
+
+	// If another thread compiled the same specialization meanwhile, use its function.
+	cached = _specializedMTLFunctions.find(key);
+	if (cached != _specializedMTLFunctions.end()) {
+		[mtlFunc release];
+		return [[cached->second retain] autorelease];
+	}
+	_specializedMTLFunctions[std::move(key)] = mtlFunc;
+	return [[mtlFunc retain] autorelease];
+}
+
+// Compiles the MTLLibrary if compilation was deferred when this library was restored from pipeline cache data.
+// The deferred flag is cleared only after _mtlLibrary is set, so a reader that sees the flag
+// clear (isSerializable(), or the unlocked check below) also sees the compiled library.
+void MVKShaderLibrary::ensureCompiled() {
+	if ( !_isCompileDeferred ) { return; }
+	lock_guard<mutex> lock(_functionsLock);
+	if ( !_isCompileDeferred ) { return; }
+	string msl;
+	decompressMSL(msl);
+	compileLibrary(msl);
+	_isCompileDeferred = false;
+}
+
+// Releases the cached functions. Called when the entry point changes, and on destruction.
+void MVKShaderLibrary::clearFunctionCache() {
+	lock_guard<mutex> lock(_functionsLock);
+	for (auto& pair : _specializedMTLFunctions) { [pair.second release]; }
+	_specializedMTLFunctions.clear();
+	[_mtlFunctionConstants release];
+	_mtlFunctionConstants = nil;
+	[_baseMTLFunction release];
+	_baseMTLFunction = nil;
+	_isBaseMTLFunctionRetrieved = false;
+}
+
 void MVKShaderLibrary::setEntryPointName(string& funcName) {
+	if (_shaderConversionResultInfo.entryPoint.mtlFunctionName == funcName) { return; }
 	_shaderConversionResultInfo.entryPoint.mtlFunctionName = funcName;
+	clearFunctionCache();
 }
 
 void MVKShaderLibrary::setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z) {
@@ -212,14 +303,17 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 								   const SPIRVToMSLConversionResultInfo& resultInfo,
-								   const MVKCompressor<std::string> compressedMSL,
-								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) :
+								   const MVKCompressor<std::string>& compressedMSL,
+								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef,
+								   bool deferCompile) :
 	MVKBaseDeviceObject(owner->getDevice()),
 	_owner(owner),
-	_maySpecializeWithMacro(specializationMacroDef == nullptr) {
+	_maySpecializeWithMacro(specializationMacroDef == nullptr),
+	_isCompileDeferred(deferCompile && !specializationMacroDef) {
 
 	_shaderConversionResultInfo = resultInfo;
 	_compressedMSL = compressedMSL;
+	if (_isCompileDeferred) { return; }
 	string msl;
 	decompressMSL(msl);
 	compileLibrary(msl, specializationMacroDef);
@@ -267,21 +361,30 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 	addPerformanceInterval(getPerformanceStats().shaderCompilation.mslLoad, startTime);
 }
 
+// Macro-specialized variants are owned by the library that created them, so they are not
+// shared with the copy. The copy re-creates any variant it needs on first use.
+// The other library may be compiling on first use on another thread. Its deferred flag is
+// cleared only after its MTLLibrary is set, so read the flag first, and read the MTLLibrary
+// only if the flag is clear. Otherwise the copy stays deferred and compiles its own library.
 MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	MVKBaseDeviceObject(other._device),
 	_owner(other._owner),
 	_maySpecializeWithMacro(other._maySpecializeWithMacro),
-	_specializationVariants(other._specializationVariants) {
+	_isCompileDeferred(other._isCompileDeferred.load()) {
 
-	_mtlLibrary = [other._mtlLibrary retain];
+	if ( !_isCompileDeferred ) { _mtlLibrary = [other._mtlLibrary retain]; }
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
 }
 
 MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
-	if (_mtlLibrary != other._mtlLibrary) {
+	if (this == &other) { return *this; }
+	clearFunctionCache();
+	_isCompileDeferred = other._isCompileDeferred.load();
+	id<MTLLibrary> otherLib = _isCompileDeferred ? nil : other._mtlLibrary;
+	if (_mtlLibrary != otherLib) {
 		[_mtlLibrary release];
-		_mtlLibrary = [other._mtlLibrary retain];
+		_mtlLibrary = [otherLib retain];
 	}
 	_owner = other._owner;
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
@@ -306,6 +409,7 @@ void MVKShaderLibrary::handleCompilationError(NSError* err, const char* opDesc) 
 }
 
 MVKShaderLibrary::~MVKShaderLibrary() {
+	clearFunctionCache();
 	[_mtlLibrary release];
 
 	for (auto& item: _specializationVariants) {
@@ -320,22 +424,90 @@ MVKShaderLibrary::~MVKShaderLibrary() {
 MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  MVKShaderModule* shaderModule, MVKPipeline* pipeline,
 														  bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
-														  uint64_t startTime) {
-	bool wasAdded = false;
-	MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
-	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
-		SPIRVToMSLConversionResult conversionResult;
-		if (shaderModule->convert(pShaderConfig, conversionResult)) {
-			shLib = addShaderLibrary(pShaderConfig, conversionResult);
-			if (pShaderFeedback) {
-				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+														  uint64_t startTime,
+														  unique_lock<mutex>* pCacheLock) {
+	if (pWasAdded) { *pWasAdded = false; }
+
+	// Exclusive access: look up, and convert and compile inline if needed.
+	if ( !pCacheLock ) {
+		MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+		if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
+			SPIRVToMSLConversionResult conversionResult;
+			if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
+				shLib = addShaderLibrary(pShaderConfig, conversionResult);
+				if (pShaderFeedback) {
+					pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+				}
+				if (pWasAdded) { *pWasAdded = true; }
 			}
-			wasAdded = true;
 		}
+		return shLib;
 	}
 
-	if (pWasAdded) { *pWasAdded = wasAdded; }
+	// Shared access: the caller holds *pCacheLock. Look up under the lock. On a miss, if another
+	// thread is already converting an equivalent request, wait for it and look up again. Otherwise
+	// register this request as in flight and release the lock while converting and compiling.
+	SPIRVToMSLConversionConfiguration markedConfig = *pShaderConfig;
+	markedConfig.markAllInterfaceVarsAndResourcesUsed();
+	std::shared_ptr<InFlightConversion> inFlight;
+	while (true) {
+		MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+		if (shLib) { return shLib; }
+		if (pipeline->shouldFailOnPipelineCompileRequired()) { return nullptr; }
 
+		std::shared_ptr<InFlightConversion> other = findInFlight(markedConfig);
+		if ( !other ) { break; }
+		other->done.wait(*pCacheLock, [&other]{ return other->isDone; });
+	}
+
+	inFlight = std::make_shared<InFlightConversion>();
+	inFlight->config = std::move(markedConfig);
+	_inFlight.push_back(inFlight);
+
+	pCacheLock->unlock();
+	MVKShaderLibrary* shLib = nullptr;
+	SPIRVToMSLConversionResult conversionResult;
+	if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
+		shLib = new MVKShaderLibrary(_owner, conversionResult);
+	}
+	pCacheLock->lock();
+
+	// Retire the in-flight entry and wake any waiters, whether or not the conversion succeeded.
+	for (auto iter = _inFlight.begin(); iter != _inFlight.end(); iter++) {
+		if (*iter == inFlight) { _inFlight.erase(iter); break; }
+	}
+	inFlight->isDone = true;
+	inFlight->done.notify_all();
+
+	if ( !shLib ) { return nullptr; }
+	return addOrReuseShaderLibrary(pShaderConfig, shLib, pWasAdded, pShaderFeedback, startTime);
+}
+
+// Returns an in-flight conversion whose request is equivalent to the marked config, or null if there is none.
+// Both configs have all elements marked as used, so matching in both directions compares every element.
+std::shared_ptr<MVKShaderLibraryCache::InFlightConversion> MVKShaderLibraryCache::findInFlight(const SPIRVToMSLConversionConfiguration& markedConfig) {
+	for (auto& inFlight : _inFlight) {
+		if (inFlight->config.matches(markedConfig) && markedConfig.matches(inFlight->config)) { return inFlight; }
+	}
+	return nullptr;
+}
+
+// Adds the newly compiled library to the cache, unless an equivalent library was added by another
+// thread meanwhile, in which case the new library is destroyed and the existing one returned.
+MVKShaderLibrary* MVKShaderLibraryCache::addOrReuseShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
+																 MVKShaderLibrary* shLib, bool* pWasAdded,
+																 VkPipelineCreationFeedback* pShaderFeedback,
+																 uint64_t startTime) {
+	MVKShaderLibrary* existing = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+	if (existing) {
+		shLib->destroy();
+		return existing;
+	}
+	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+	if (pShaderFeedback) {
+		pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+	}
+	if (pWasAdded) { *pWasAdded = true; }
 	return shLib;
 }
 
@@ -368,8 +540,9 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 // Adds and returns a new shader library configured from contents read from a pipeline cache.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResultInfo& resultInfo,
-														  const MVKCompressor<std::string> compressedMSL) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
+														  const MVKCompressor<std::string>& compressedMSL,
+														  bool deferCompile) {
+	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL, nullptr, deferCompile);
 	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
 	return shLib;
 }
@@ -404,8 +577,8 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 		if (pipelineCache) {
 			mvkLib = pipelineCache->getShaderLibrary(pShaderConfig, this, pipeline, pShaderFeedback, startTime);
 		} else {
-			lock_guard<mutex> lock(_accessLock);
-			mvkLib = _shaderLibraryCache.getShaderLibrary(pShaderConfig, this, pipeline, nullptr, pShaderFeedback, startTime);
+			unique_lock<mutex> lock(_accessLock);
+			mvkLib = _shaderLibraryCache.getShaderLibrary(pShaderConfig, this, pipeline, nullptr, pShaderFeedback, startTime, &lock);
 		}
 	} else {
 		mvkLib->setEntryPointName(pShaderConfig->options.entryPointName);
@@ -471,6 +644,41 @@ bool MVKShaderModule::convert(SPIRVToMSLConversionConfiguration* pShaderConfig,
 
 void MVKShaderModule::setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z) {
 	if(_directMSLLibrary) { _directMSLLibrary->setWorkgroupSize(x, y, z); }
+}
+
+
+#pragma mark Reflection
+
+// Entries are never removed from the map, and std::map does not move its nodes,
+// so the returned reference stays valid after the lock is released.
+const MVKShaderModule::InterfaceReflection& MVKShaderModule::getInterfaceReflection(spv::ExecutionModel model,
+																					 spv::StorageClass storage,
+																					 const char* entryName) {
+	InterfaceReflectionKey key { model, storage, entryName ? entryName : "" };
+	lock_guard<mutex> lock(_reflectionLock);
+	auto iter = _interfaceReflections.find(key);
+	if (iter == _interfaceReflections.end()) {
+		iter = _interfaceReflections.emplace(key, InterfaceReflection()).first;
+		InterfaceReflection& refl = iter->second;
+		refl.success = mvk::getShaderInterfaceVariables(getSPIRV(), storage, model, key.entryName, refl.vars, refl.errorLog);
+	}
+	return iter->second;
+}
+
+bool MVKShaderModule::getTessReflectionData(const char* tescEntryName,
+											MVKShaderModule* teseModule, const char* teseEntryName,
+											SPIRVTessReflectionData& reflectData, string& errorLog) {
+	TessReflectionKey key { tescEntryName ? tescEntryName : "", teseModule->getKey(), teseEntryName ? teseEntryName : "" };
+	lock_guard<mutex> lock(_reflectionLock);
+	auto iter = _tessReflections.find(key);
+	if (iter == _tessReflections.end()) {
+		iter = _tessReflections.emplace(key, TessReflection()).first;
+		TessReflection& refl = iter->second;
+		refl.success = mvk::getTessReflectionData(getSPIRV(), key.tescEntryName, teseModule->getSPIRV(), key.teseEntryName, refl.data, refl.errorLog);
+	}
+	reflectData = iter->second.data;
+	errorLog = iter->second.errorLog;
+	return iter->second.success;
 }
 
 
@@ -718,12 +926,14 @@ id<MTLFunction> MVKFunctionSpecializer::newMTLFunction(id<MTLLibrary> mtlLibrary
 	unique_lock<mutex> lock(_completionLock);
 
 	compile(lock, ^{
-		[mtlLibrary newFunctionWithName: funcName
-						 constantValues: constantValues
-					  completionHandler: ^(id<MTLFunction> mtlFunc, NSError* error) {
-						  bool isLate = compileComplete(mtlFunc, error);
-						  if (isLate) { destroy(); }
-					  }];
+		@synchronized (getMTLDevice()) {
+			[mtlLibrary newFunctionWithName: funcName
+							 constantValues: constantValues
+						  completionHandler: ^(id<MTLFunction> mtlFunc, NSError* error) {
+							  bool isLate = compileComplete(mtlFunc, error);
+							  if (isLate) { destroy(); }
+						  }];
+		}
 	});
 
 	return [_mtlFunction retain];

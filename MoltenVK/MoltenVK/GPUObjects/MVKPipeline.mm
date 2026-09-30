@@ -806,7 +806,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	if (pTessCtlSS && pTessEvalSS) {
 		_isTessellationPipeline = true;
 
-		if (!getTessReflectionData(_tessCtlModule->getSPIRV(), pTessCtlSS->pName, _tessEvalModule->getSPIRV(), pTessEvalSS->pName, reflectData, reflectErrorLog) ) {
+		if (!_tessCtlModule->getTessReflectionData(pTessCtlSS->pName, _tessEvalModule, pTessEvalSS->pName, reflectData, reflectErrorLog) ) {
 			setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to reflect tessellation shaders: %s", reflectErrorLog.c_str()));
 			return;
 		}
@@ -1180,7 +1180,7 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 
 	SPIRVShaderOutputs vtxOutputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_vertexModule->getSPIRV(), spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
+	if (!_vertexModule->getShaderOutputs(spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get vertex outputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1219,7 +1219,7 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessVertexStageDescript
 
 	SPIRVShaderInputs tcInputs;
 	std::string errorLog;
-	if (!getShaderInputs(_tessCtlModule->getSPIRV(), spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcInputs, errorLog) ) {
+	if (!_tessCtlModule->getShaderInputs(spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcInputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation control inputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1307,11 +1307,11 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessControlStageDescrip
 	SPIRVShaderOutputs vtxOutputs;
 	SPIRVShaderInputs teInputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_vertexModule->getSPIRV(), spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
+	if (!_vertexModule->getShaderOutputs(spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get vertex outputs: %s", errorLog.c_str()));
 		return nil;
 	}
-	if (!getShaderInputs(_tessEvalModule->getSPIRV(), spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teInputs, errorLog) ) {
+	if (!_tessEvalModule->getShaderInputs(spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teInputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation evaluation inputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1351,11 +1351,11 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLTessRasterStageDescripto
 	SPIRVShaderOutputs tcOutputs, teOutputs;
 	SPIRVShaderInputs teInputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_tessCtlModule->getSPIRV(), spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcOutputs, errorLog) ) {
+	if (!_tessCtlModule->getShaderOutputs(spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation control outputs: %s", errorLog.c_str()));
 		return nil;
 	}
-	if (!getShaderOutputs(_tessEvalModule->getSPIRV(), spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teOutputs, errorLog) ) {
+	if (!_tessEvalModule->getShaderOutputs(spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation evaluation outputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -2474,21 +2474,24 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfigu
 													 VkPipelineCreationFeedback* pShaderFeedback,
 													 uint64_t startTime) {
 	if (_isExternallySynchronized) {
-		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime, nullptr);
 	} else {
-		lock_guard<mutex> lock(_shaderCacheLock);
-		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+		unique_lock<mutex> lock(_shaderCacheLock);
+		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime, &lock);
 	}
 }
 
+// The shader library cache releases pCacheLock while it converts and compiles a missing library,
+// and holds it again on return, so marking the cache dirty below happens under the lock.
 MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionConfiguration* pContext,
 														 MVKShaderModule* shaderModule,
 														 MVKPipeline* pipeline,
 														 VkPipelineCreationFeedback* pShaderFeedback,
-														 uint64_t startTime) {
+														 uint64_t startTime,
+														 unique_lock<mutex>* pCacheLock) {
 	bool wasAdded = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime, pCacheLock);
 	if (wasAdded) { markDirty(); }
 	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
 	return shLib;
@@ -2527,7 +2530,14 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
+	// Advances to the next library that should be written, skipping libraries whose compile failed.
+	bool next() {
+		size_t count = _pSLCache ? _pSLCache->_shaderLibraries.size() : 0;
+		while (++_index < count) {
+			if (_pSLCache->_shaderLibraries[_index].second->isSerializable()) { return true; }
+		}
+		return false;
+	}
 	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
 	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
 	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
@@ -2687,10 +2697,11 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					MVKCompressor<std::string> compressedMSL;
 					reader(compressedMSL);
 
-					// Add the shader library to the staging cache.
+					// Add the shader library to the staging cache. The MTLLibrary is compiled
+					// on first use, so creating the cache does not compile every entry up front.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
+					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL, true);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
 
 					break;
 				}

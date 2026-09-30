@@ -23,7 +23,14 @@
 #include "MVKCodec.h"
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
+#include <MoltenVKShaderConverter/SPIRVReflection.h>
+#include <atomic>
+#include <condition_variable>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #import <Metal/Metal.h>
 
@@ -118,11 +125,16 @@ public:
 	/**
 	 * When specializationMacroDef is not null, creates a macro-specialized library
 	 * specializationMacroDef contains (specialization id, value) mappings, should be sorted
+	 *
+	 * When deferCompile is true, the MTLLibrary is not compiled until a function is first
+	 * retrieved from it. This is used for libraries restored from pipeline cache data, most
+	 * of which an app may never use in a given run.
 	 */
 	MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 					 const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-					 const MVKCompressor<std::string> compressedMSL,
-					 const std::vector<std::pair<uint32_t, MVKShaderMacroValue>>* specializationMacroDef = nullptr);
+					 const MVKCompressor<std::string>& compressedMSL,
+					 const std::vector<std::pair<uint32_t, MVKShaderMacroValue>>* specializationMacroDef = nullptr,
+					 bool deferCompile = false);
 
 	MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 					 const void* mslCompiledCodeData,
@@ -142,8 +154,16 @@ protected:
 	MVKMTLFunction getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 								  VkPipelineCreationFeedback* pShaderFeedback,
 								  MVKShaderModule* shaderModule);
+	MVKShaderLibrary* getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo);
+	void ensureCompiled();
+	/** Returns whether this library should be written to pipeline cache data. Libraries whose compile failed are not. */
+	bool isSerializable() const { return _isCompileDeferred || _mtlLibrary; }
+	bool ensureBaseMTLFunction(VkPipelineCreationFeedback* pShaderFeedback, MVKShaderModule* shaderModule);
+	id<MTLFunction> getSpecializedMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
+											  VkPipelineCreationFeedback* pShaderFeedback,
+											  MVKShaderModule* shaderModule);
+	void clearFunctionCache();
 	void handleCompilationError(NSError* err, const char* opDesc);
-    MTLFunctionConstant* getFunctionConstant(NSArray<MTLFunctionConstant*>* mtlFCs, NSUInteger mtlFCID);
 	void compileLibrary(const std::string& msl,
 						const std::vector<std::pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef = nullptr);
 	void compressMSL(const std::string& msl);
@@ -151,14 +171,30 @@ protected:
 	MVKCompressor<std::string>& getCompressedMSL() { return _compressedMSL; }
 
 	MVKVulkanAPIDeviceObject* _owner;
-	id<MTLLibrary> _mtlLibrary;
+	id<MTLLibrary> _mtlLibrary = nil;
 	MVKCompressor<std::string> _compressedMSL;
 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
 
 	/** When true, representing a library created with source, but never specialized */
 	bool _maySpecializeWithMacro;
-	/** Can only be populated when _maySpecializeWithMacro is true */
+	/** When true, the MTLLibrary has not been compiled yet. Cleared by ensureCompiled() after _mtlLibrary is set. */
+	std::atomic<bool> _isCompileDeferred { false };
+	/** Can only be populated when _maySpecializeWithMacro is true. Guarded by _variantsLock. */
 	std::map<std::vector<std::pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary *> _specializationVariants;
+	std::mutex _variantsLock;
+
+	/**
+	 * MTLFunctions retrieved from this library, guarded by _functionsLock.
+	 * The base function is the unspecialized entry point, retrieved once. It is the result
+	 * for every pipeline when the shader has no function constants, and otherwise provides
+	 * the function constants. Specialized functions are cached by the values of the
+	 * function constants that the pipeline's specialization info supplies.
+	 */
+	id<MTLFunction> _baseMTLFunction = nil;
+	NSArray<MTLFunctionConstant*>* _mtlFunctionConstants = nil;
+	bool _isBaseMTLFunctionRetrieved = false;
+	std::map<std::vector<uint8_t>, id<MTLFunction>> _specializedMTLFunctions;
+	std::mutex _functionsLock;
 };
 
 
@@ -181,11 +217,19 @@ public:
 	 *
 	 * If pWasAdded is not nil, this function will set it to true if a new shader library was created,
 	 * and to false if an existing shader library was found and returned.
+	 *
+	 * pCacheLock is the lock that guards this cache, held by the caller. When it is not null,
+	 * the lock is released while the SPIR-V is converted and the Metal library compiled, so that
+	 * other threads can use the cache meanwhile, and re-acquired before returning. A thread that
+	 * requests a library that another thread is already compiling waits for that library instead
+	 * of compiling it again. When pCacheLock is null, the caller guarantees exclusive access
+	 * (an externally synchronized pipeline cache) and the work is done inline.
 	 */
 	MVKShaderLibrary* getShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   MVKShaderModule* shaderModule, MVKPipeline* pipeline,
 									   bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
-									   uint64_t startTime = 0);
+									   uint64_t startTime = 0,
+									   std::unique_lock<std::mutex>* pCacheLock = nullptr);
 
 	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner) : MVKBaseDeviceObject(owner->getDevice()), _owner(owner) {};
 
@@ -203,11 +247,24 @@ protected:
 									   const mvk::SPIRVToMSLConversionResult& conversionResult);
 	MVKShaderLibrary* addShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-									   const MVKCompressor<std::string> compressedMSL);
+									   const MVKCompressor<std::string>& compressedMSL,
+									   bool deferCompile);
 	void merge(MVKShaderLibraryCache* other);
+
+	/** A conversion and compilation that is in progress on some thread, with the cache lock released. */
+	struct InFlightConversion {
+		mvk::SPIRVToMSLConversionConfiguration config;	// Requested config with all elements marked used, for equivalence matching
+		std::condition_variable done;
+		bool isDone = false;
+	};
+	std::shared_ptr<InFlightConversion> findInFlight(const mvk::SPIRVToMSLConversionConfiguration& markedConfig);
+	MVKShaderLibrary* addOrReuseShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+											  MVKShaderLibrary* shLib, bool* pWasAdded,
+											  VkPipelineCreationFeedback* pShaderFeedback, uint64_t startTime);
 
 	MVKVulkanAPIDeviceObject* _owner;
 	MVKSmallVector<std::pair<mvk::SPIRVToMSLConversionConfiguration, MVKShaderLibrary*>> _shaderLibraries;
+	std::vector<std::shared_ptr<InFlightConversion>> _inFlight;	// Guarded by the caller's cache lock
 };
 
 
@@ -260,6 +317,31 @@ public:
 	/** Returns the original SPIR-V code that was specified when this object was created. */
 	const std::vector<uint32_t>& getSPIRV() { return _spvConverter.getSPIRV(); }
 
+	/**
+	 * Populates outputs with the interface output variables of the entry point, returning false
+	 * and populating errorLog if reflection fails. The reflection result depends only on this
+	 * module, the execution model and the entry point, so it is computed once and cached.
+	 */
+	template <typename Vo>
+	bool getShaderOutputs(spv::ExecutionModel model, const char* entryName, Vo& outputs, std::string& errorLog) {
+		return copyInterfaceReflection(model, spv::StorageClassOutput, entryName, outputs, errorLog);
+	}
+
+	/** Populates inputs with the interface input variables of the entry point. See getShaderOutputs(). */
+	template <typename Vi>
+	bool getShaderInputs(spv::ExecutionModel model, const char* entryName, Vi& inputs, std::string& errorLog) {
+		return copyInterfaceReflection(model, spv::StorageClassInput, entryName, inputs, errorLog);
+	}
+
+	/**
+	 * Populates reflectData with the tessellation reflection data of this tessellation control
+	 * module and the tessellation evaluation module, returning false and populating errorLog if
+	 * reflection fails. The result is cached in this module.
+	 */
+	bool getTessReflectionData(const char* tescEntryName,
+							   MVKShaderModule* teseModule, const char* teseEntryName,
+							   mvk::SPIRVTessReflectionData& reflectData, std::string& errorLog);
+
     /** Sets the number of threads in a single compute kernel workgroup, per dimension. */
     void setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z);
     
@@ -275,11 +357,55 @@ protected:
 
 	void propagateDebugName() override {}
 
+	struct InterfaceReflectionKey {
+		spv::ExecutionModel model;
+		spv::StorageClass storage;
+		std::string entryName;
+		bool operator<(const InterfaceReflectionKey& o) const {
+			if (model != o.model) { return model < o.model; }
+			if (storage != o.storage) { return storage < o.storage; }
+			return entryName < o.entryName;
+		}
+	};
+	struct InterfaceReflection {
+		std::vector<mvk::SPIRVShaderInterfaceVariable> vars;
+		std::string errorLog;
+		bool success = false;
+	};
+	struct TessReflectionKey {
+		std::string tescEntryName;
+		MVKShaderModuleKey teseKey;
+		std::string teseEntryName;
+		bool operator<(const TessReflectionKey& o) const {
+			if (tescEntryName != o.tescEntryName) { return tescEntryName < o.tescEntryName; }
+			if (teseKey.codeHash != o.teseKey.codeHash) { return teseKey.codeHash < o.teseKey.codeHash; }
+			if (teseKey.codeSize != o.teseKey.codeSize) { return teseKey.codeSize < o.teseKey.codeSize; }
+			return teseEntryName < o.teseEntryName;
+		}
+	};
+	struct TessReflection {
+		mvk::SPIRVTessReflectionData data;
+		std::string errorLog;
+		bool success = false;
+	};
+
+	const InterfaceReflection& getInterfaceReflection(spv::ExecutionModel model, spv::StorageClass storage, const char* entryName);
+	template <typename V>
+	bool copyInterfaceReflection(spv::ExecutionModel model, spv::StorageClass storage, const char* entryName, V& vars, std::string& errorLog) {
+		const InterfaceReflection& refl = getInterfaceReflection(model, storage, entryName);
+		vars.assign(refl.vars.begin(), refl.vars.end());
+		errorLog = refl.errorLog;
+		return refl.success;
+	}
+
 	MVKShaderLibraryCache _shaderLibraryCache;
 	mvk::SPIRVToMSLConverter _spvConverter;
 	MVKShaderLibrary* _directMSLLibrary;
 	MVKShaderModuleKey _key;
     std::mutex _accessLock;
+	std::map<InterfaceReflectionKey, InterfaceReflection> _interfaceReflections;	// Guarded by _reflectionLock
+	std::map<TessReflectionKey, TessReflection> _tessReflections;					// Guarded by _reflectionLock
+	std::mutex _reflectionLock;
 };
 
 

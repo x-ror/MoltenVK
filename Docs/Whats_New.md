@@ -28,6 +28,9 @@ Released TBD
 - Fix `VkDeviceMemory` imported from a `MTLTexture` not backing the image bound to it, and over-releasing that texture.
 - Fix leak of the `MTLBuffer` of a host-coherent `VkDeviceMemory` that also holds a `MTLTexture`.
 - Build MoltenVK with `C++20` (Xcode and CMake). CMake builds now default to `Release` and hidden symbol visibility.
+- Allow shader conversion and `MTLLibrary` compilation to proceed in parallel across threads sharing a `VkPipelineCache`.
+- Cache `MTLFunction` specializations and SPIR-V interface reflection per shader module, and compile libraries restored from `VkPipelineCache` data on first use instead of when the cache is created.
+- Fix SPIR-V to MSL conversion errors being reported as Metal compilation errors, and a possible crash on malformed SPIR-V.
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 
 
