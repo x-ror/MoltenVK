@@ -147,6 +147,13 @@ MVKMTLBufferAllocation* MVKMTLBufferAllocator::acquireMTLBufferRegion(NSUInteger
 
     // Convert max length to the next power-of-two exponent to use as a lookup
     NSUInteger p2Exp = mvkPowerOfTwoExponent(length);
+
+	// MVKAssert is compiled out of release builds, and there is no pool slot for a larger request.
+	if (p2Exp >= _regionPoolCount) [[unlikely]] {
+		reportError(VK_ERROR_OUT_OF_DEVICE_MEMORY, "A temporary MTLBuffer region of %lu bytes exceeds the maximum of %lu bytes.",
+					(unsigned long)length, (unsigned long)_maxAllocationLength);
+		return nullptr;
+	}
     return getRegionPool(p2Exp)->acquireAllocation();
 }
 
