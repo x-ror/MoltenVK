@@ -32,6 +32,7 @@ Released TBD
 - Allow shader conversion and `MTLLibrary` compilation to proceed in parallel across threads sharing a `VkPipelineCache`.
 - Cache `MTLFunction` specializations and SPIR-V interface reflection per shader module, and compile libraries restored from `VkPipelineCache` data on first use instead of when the cache is created.
 - Fix SPIR-V to MSL conversion errors being reported as Metal compilation errors, and a possible crash on malformed SPIR-V.
+- Skip re-running the descriptor bind script on draws and dispatches that change no descriptor state, and track resources used by a Metal encoder in a map that keeps its storage across encoders.
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 
 
