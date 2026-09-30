@@ -351,7 +351,7 @@ uint32_t MVKCommandBuffer::getViewCount() const {
 	} else {
 		viewMask = _currentSubpassInfo.subpassViewMask;
 	}
-	return max(__builtin_popcount(viewMask), 1);
+	return max(mvkPopcount(viewMask), 1u);
 }
 
 void MVKCommandBuffer::clearPrefilledMTLCommandBuffer() {

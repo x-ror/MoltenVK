@@ -27,6 +27,8 @@ Released TBD
 - Fix spurious warning about blending on attachment formats that do not support it.
 - Fix `VkDeviceMemory` imported from a `MTLTexture` not backing the image bound to it, and over-releasing that texture.
 - Fix leak of the `MTLBuffer` of a host-coherent `VkDeviceMemory` that also holds a `MTLTexture`.
+- Build MoltenVK with `C++20` (Xcode and CMake). CMake builds now default to `Release` and hidden symbol visibility.
+- Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 
 
 
