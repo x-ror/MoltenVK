@@ -2474,21 +2474,24 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfigu
 													 VkPipelineCreationFeedback* pShaderFeedback,
 													 uint64_t startTime) {
 	if (_isExternallySynchronized) {
-		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime, nullptr);
 	} else {
-		lock_guard<mutex> lock(_shaderCacheLock);
-		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+		unique_lock<mutex> lock(_shaderCacheLock);
+		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime, &lock);
 	}
 }
 
+// The shader library cache releases pCacheLock while it converts and compiles a missing library,
+// and holds it again on return, so marking the cache dirty below happens under the lock.
 MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionConfiguration* pContext,
 														 MVKShaderModule* shaderModule,
 														 MVKPipeline* pipeline,
 														 VkPipelineCreationFeedback* pShaderFeedback,
-														 uint64_t startTime) {
+														 uint64_t startTime,
+														 unique_lock<mutex>* pCacheLock) {
 	bool wasAdded = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime, pCacheLock);
 	if (wasAdded) { markDirty(); }
 	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
 	return shLib;
