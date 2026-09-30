@@ -95,7 +95,7 @@ protected:
 
 	VkBufferUsageFlags2 _usage;
 	id<MTLBuffer> _mtlBuffer = nil;
-    std::mutex _lock;
+    MVKUnfairLock _lock;
 };
 
 
@@ -137,6 +137,6 @@ protected:
 	MTLPixelFormat _mtlPixelFormat;
 	NSUInteger _mtlBytesPerRow;
 	VkExtent2D _textureSize;
-	std::mutex _lock;
+	MVKUnfairLock _lock;
 };
 

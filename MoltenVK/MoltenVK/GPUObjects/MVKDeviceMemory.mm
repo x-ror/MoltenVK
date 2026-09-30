@@ -92,7 +92,7 @@ VkResult MVKDeviceMemory::flushToDevice(VkDeviceSize offset, VkDeviceSize size) 
 
 	// If we have an MTLHeap object, there's no need to sync memory manually between resources and the buffer.
 	if ( !_mtlHeap ) {
-		lock_guard<mutex> lock(_rezLock);
+		lock_guard<MVKUnfairLock> lock(_rezLock);
 		for (auto& img : _imageMemoryBindings) { img->flushToDevice(offset, memSize); }
 	}
 
@@ -115,7 +115,7 @@ VkResult MVKDeviceMemory::pullFromDevice(VkDeviceSize offset,
 
 	// If we have an MTLHeap object, there's no need to sync memory manually between resources and the buffer.
 	if ( !_mtlHeap ) {
-		lock_guard<mutex> lock(_rezLock);
+		lock_guard<MVKUnfairLock> lock(_rezLock);
         for (auto& img : _imageMemoryBindings) { img->pullFromDevice(offset, memSize); }
 	}
 
@@ -129,7 +129,7 @@ VkDeviceSize MVKDeviceMemory::adjustMemorySize(VkDeviceSize size, VkDeviceSize o
 }
 
 VkResult MVKDeviceMemory::addBuffer(MVKBuffer* mvkBuff) {
-	lock_guard<mutex> lock(_rezLock);
+	lock_guard<MVKUnfairLock> lock(_rezLock);
 
 	// If a dedicated alloc, ensure this buffer is the one and only buffer
 	// I am dedicated to.
@@ -156,14 +156,14 @@ void MVKDeviceMemory::removeBuffer(MVKDeviceMemory** pMem, MVKBuffer* mvkBuff) {
 	os_unfair_lock_lock(&s_device_memory_destruction_lock);
 	if (MVKDeviceMemory* mem = *pMem) {
 		*pMem = nullptr;
-		std::lock_guard<std::mutex> lock(mem->_rezLock);
+		std::lock_guard<MVKUnfairLock> lock(mem->_rezLock);
 		mvkRemoveAllOccurances(mem->_buffers, mvkBuff);
 	}
 	os_unfair_lock_unlock(&s_device_memory_destruction_lock);
 }
 
 VkResult MVKDeviceMemory::addImageMemoryBinding(MVKImageMemoryBinding* mvkImg) {
-	lock_guard<mutex> lock(_rezLock);
+	lock_guard<MVKUnfairLock> lock(_rezLock);
 
 	// If a dedicated alloc, ensure this image is the one and only image
 	// I am dedicated to. If my image is aliasable, though, allow other aliasable
@@ -181,7 +181,7 @@ void MVKDeviceMemory::removeImageMemoryBinding(MVKDeviceMemory** pMem, MVKImageM
 	os_unfair_lock_lock(&s_device_memory_destruction_lock);
 	if (MVKDeviceMemory* mem = *pMem) {
 		*pMem = nullptr;
-		std::lock_guard<std::mutex> lock(mem->_rezLock);
+		std::lock_guard<MVKUnfairLock> lock(mem->_rezLock);
 		mvkRemoveAllOccurances(mem->_imageMemoryBindings, mvkImg);
 	}
 	os_unfair_lock_unlock(&s_device_memory_destruction_lock);

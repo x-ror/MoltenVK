@@ -436,7 +436,7 @@ public:
 	MTLStorageMode getMTLStorageModeFromVkMemoryPropertyFlags(VkMemoryPropertyFlags vkFlags);
 
 	/** Returns the MTLDevice capabilities. */
-	const MVKMTLDeviceCapabilities getMTLDeviceCapabilities() { return _gpuCapabilities; }
+	const MVKMTLDeviceCapabilities& getMTLDeviceCapabilities() const { return _gpuCapabilities; }
 
 	/** Returns info on the sizes of argument buffers. */
 	const MVKPhysicalDeviceArgumentBufferSizes& getArgumentBufferSizes() const { return _argumentBufferSizes; }
@@ -1107,7 +1107,7 @@ protected:
 	VkPhysicalDevice##structName##Features##extnSfx _enabled##structName##Features;
 #include "MVKDeviceFeatureStructs.def"
 
-	id<MTLFence> _barrierFences[kMVKBarrierStageCount][kMVKBarrierFenceCount];
+	id<MTLFence> _barrierFences[kMVKBarrierStageCount][kMVKBarrierFenceCount] = {};
 
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;

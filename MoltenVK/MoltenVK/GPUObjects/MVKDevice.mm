@@ -2152,8 +2152,8 @@ VkResult MVKPhysicalDevice::getSurfaceFormats(MVKSurface* surface,
 	if (pSurfaceFormats) {
 		// Populate temp array of VkSurfaceFormatKHR then copy into array of VkSurfaceFormat2KHR.
 		// The value of *pCount may be reduced during call, but will always be <= size of temp array.
-		VkSurfaceFormatKHR surfFmts[*pCount];
-		rslt = getSurfaceFormats(surface, pCount, surfFmts);
+		MVKSmallVector<VkSurfaceFormatKHR, 64> surfFmts(*pCount);
+		rslt = getSurfaceFormats(surface, pCount, surfFmts.data());
 		for (uint32_t fmtIdx = 0; fmtIdx < *pCount; fmtIdx++) {
 			auto pSF = &pSurfaceFormats[fmtIdx];
 			pSF->sType = VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR;
@@ -2294,8 +2294,8 @@ VkResult MVKPhysicalDevice::getQueueFamilyProperties(uint32_t* pCount,
 	if (pQueueFamilyProperties) {
 		// Populate temp array of VkQueueFamilyProperties then copy into array of VkQueueFamilyProperties2KHR.
 		// The value of *pCount may be reduced during call, but will always be <= size of temp array.
-		VkQueueFamilyProperties qProps[*pCount];
-		rslt = getQueueFamilyProperties(pCount, qProps);
+		MVKSmallVector<VkQueueFamilyProperties, kMVKQueueFamilyCount> qProps(*pCount);
+		rslt = getQueueFamilyProperties(pCount, qProps.data());
 		for (uint32_t qpIdx = 0; qpIdx < *pCount; qpIdx++) {
 			auto pQP = &pQueueFamilyProperties[qpIdx];
 			pQP->queueFamilyProperties = qProps[qpIdx];
@@ -5219,8 +5219,9 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 		reportWarning(VK_ERROR_FEATURE_NOT_PRESENT, "Non-Apple GPUs do not fully support robustness.");
 	}
 
-	// Initialize fences for execution barriers
-	@autoreleasepool {
+	// Initialize fences for execution barriers. They are only used when encoding with
+	// Metal argument buffers and a residency set, so other devices do not create them.
+	if (_physicalDevice->isUsingMetalArgumentBuffers() && hasResidencySet()) @autoreleasepool {
 		for (int stage = 0; stage < kMVKBarrierStageCount; ++stage) {
 			for (int index = 0; index < kMVKBarrierFenceCount; ++index) {
 				auto &fence = _barrierFences[stage][index];

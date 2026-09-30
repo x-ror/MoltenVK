@@ -216,6 +216,15 @@ Flagged for a deliberate decision rather than recommended outright.
 
 ## 3. Memory
 
+**Status:** implemented on this branch: 3.1, 3.2, 3.3, 3.4, 3.7, 3.8, the `MVKPipelineBarrier`
+reordering and the by-reference device capabilities from 3.5, and the barrier fences and
+environment variable lookup from 3.6. The fences are skipped unless the device uses Metal
+argument buffers and a residency set, which are the only paths that read them. Rewriting 3.8
+found that the data of a pushed inline uniform block was never copied, so it is now copied too.
+Not done: the `MVKPointerMap` slot reordering, because reordering alone keeps the slot at
+24 bytes; the `MVKVkFormatDesc` and device-capability bitmask restructuring, and the
+`constexpr` extension table, which are larger refactors of startup-only data.
+
 ### 3.1 Every `VkCommandPool` creates ~90 `MVKMTLBufferAllocationPool`s (~100 KB) up front (M / L)
 `Commands/MVKCommandEncodingPool.mm:183-187`, `MVKMTLBufferAllocation.mm:158-166`: one pool per
 power-of-two exponent up to `maxBufferLength` (exponent 34-36 on Apple silicon), each with a

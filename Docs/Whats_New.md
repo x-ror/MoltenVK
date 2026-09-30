@@ -47,6 +47,9 @@ Released TBD
 - Look up `vkGetInstanceProcAddr()` and `vkGetDeviceProcAddr()` names without allocating, and build the entry point table once per process with extension names resolved to indexes.
 - Use C++20 `<bit>` operations for power-of-two, mipmap level, and multiview view-mask computations, and avoid per-draw work when retrieving pipeline stages, binding descriptor sets, and tracing Vulkan calls when tracing is off.
 - Reduce pipeline creation and `VkPipelineCache` loading costs: copy the shader conversion configuration only on a cache miss, move cache entries into place instead of copying them, compare configurations index-aligned before scanning, index Metal function constants once per library, and skip macro specialization for shaders that use none.
+- Reduce memory per `VkCommandPool` by creating temporary `MTLBuffer` pools on first use and removing unused locks from command pools, and per buffer, image, view and device memory by using a 4-byte lock in place of `std::mutex`.
+- Create the barrier `MTLFence` objects of a device only when they can be used, read environment variables without building a dictionary per lookup, and replace variable-length stack arrays in transfer commands and device queries with small vectors.
+- Copy push descriptor writes into one block of storage reused across recordings, and fix the data of an inline uniform block pushed with `vkCmdPushDescriptorSet()` not being copied at record time.
 
 
 

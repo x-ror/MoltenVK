@@ -20,7 +20,6 @@
 #pragma once
 
 #include "MVKBaseObject.h"
-#include <mutex>
 
 
 #pragma mark -
@@ -66,8 +65,8 @@ typedef struct MVKObjectPoolCounts {
  *
  * When this pool is destroyed, any objects contained in the pool are also destroyed.
  *
- * This pool includes member functions for managing resources in either a thread-safe,
- * or somewhat faster, but not-thread-safe manner.
+ * This pool is not thread-safe. Access from multiple threads must be synchronized
+ * externally, as MVKMTLBufferAllocationPool does with its own lock.
  *
  * An instance of this pool can be configured to either manage a pool of objects,
  * or simply allocate a new object instance on each request and destroy the object
@@ -125,21 +124,8 @@ public:
 		}
 	}
 
-	/** A thread-safe version of the acquireObject() function. */
-	T* acquireObjectSafely() {
-		std::lock_guard<std::mutex> lock(_lock);
-		return acquireObject();
-	}
-
-	/** A thread-safe version of the returnObject() function. */
-	void returnObjectSafely(T* obj) {
-		std::lock_guard<std::mutex> lock(_lock);
-		returnObject(obj);
-	}
-
-	/** Clears all the objects from this pool, destroying each one. This method is thread-safe. */
+	/** Clears all the objects from this pool, destroying each one. This method is not thread-safe. */
 	void clear() {
-        std::lock_guard<std::mutex> lock(_lock);
 		while ( T* obj = nextObject() ) { destroyObject(obj); }
 	}
 
@@ -181,7 +167,6 @@ protected:
 		_counts.alive--;
 	}
 
-    std::mutex _lock;
 	T* _head = nullptr;
 	T* _tail = nullptr;
 	bool _isPooling;

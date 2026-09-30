@@ -1849,7 +1849,7 @@ void mvkPushDescriptorSetTemplate(void* dst, MVKDescriptorSetLayout* layout, MVK
 
 #pragma mark - MVKDescriptorPoolFreeList
 
-void MVKDescriptorPoolFreeList::add(size_t item, size_t size) {
+void MVKDescriptorPoolFreeList::add(uint32_t item, uint32_t size) {
 	_freeSize += size;
 	auto entry = findEntry(size);
 	if (entry != entries.end() && entry->size == size) {
@@ -1859,10 +1859,10 @@ void MVKDescriptorPoolFreeList::add(size_t item, size_t size) {
 	}
 }
 
-std::optional<std::pair<size_t, size_t>> MVKDescriptorPoolFreeList::get(size_t minSize, size_t maxSize) {
+std::optional<std::pair<uint32_t, uint32_t>> MVKDescriptorPoolFreeList::get(uint32_t minSize, uint32_t maxSize) {
 	for (auto entry = findEntry(minSize); entry != entries.end() && entry->size <= maxSize; ++entry) {
 		if (!entry->items.empty()) {
-			size_t item = entry->items.back();
+			uint32_t item = entry->items.back();
 			entry->items.pop_back();
 			_freeSize -= entry->size;
 			return std::make_pair(item, entry->size);
@@ -1878,8 +1878,8 @@ void MVKDescriptorPoolFreeList::reset() {
 	_freeSize = 0;
 }
 
-std::vector<MVKDescriptorPoolFreeList::Entry>::iterator MVKDescriptorPoolFreeList::findEntry(size_t size) {
-	return std::lower_bound(entries.begin(), entries.end(), size, [](const Entry& lhs, const size_t& rhs){ return lhs.size < rhs; });
+std::vector<MVKDescriptorPoolFreeList::Entry>::iterator MVKDescriptorPoolFreeList::findEntry(uint32_t size) {
+	return std::lower_bound(entries.begin(), entries.end(), size, [](const Entry& lhs, uint32_t rhs){ return lhs.size < rhs; });
 }
 
 #pragma mark - MVKDescriptorPool
@@ -2208,7 +2208,7 @@ VkResult MVKDescriptorPool::freeDescriptorSets(uint32_t count, const VkDescripto
 			MVKDescriptorSetListItem* setItem = reinterpret_cast<MVKDescriptorSetListItem*>(pDescriptorSets[i]);
 			MVKDescriptorSet* set = &setItem->allocated;
 			if (set->cpuBufferSize)
-				_cpuBufferFreeList.add(set->cpuBuffer - _cpuBuffer.data(), set->cpuBufferSize);
+				_cpuBufferFreeList.add((uint32_t)(set->cpuBuffer - _cpuBuffer.data()), set->cpuBufferSize);
 			if (set->gpuBufferSize)
 				_gpuBufferFreeList.add(set->gpuBufferOffset, set->gpuBufferSize);
 			setItem->freed.next = _firstFreeDescriptorSet;
@@ -2260,6 +2260,7 @@ MVKDescriptorUpdateTemplate::MVKDescriptorUpdateTemplate(MVKDevice* device,
 														 const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo) :
 MVKVulkanAPIDeviceObject(device), _pipelineBindPoint(pCreateInfo->pipelineBindPoint), _type(pCreateInfo->templateType) {
 
+	_entries.reserve(pCreateInfo->descriptorUpdateEntryCount);
 	for (uint32_t i = 0; i < pCreateInfo->descriptorUpdateEntryCount; i++) {
 		const auto& entry = pCreateInfo->pDescriptorUpdateEntries[i];
 		_entries.push_back(entry);

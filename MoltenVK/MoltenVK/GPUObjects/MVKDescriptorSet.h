@@ -493,22 +493,23 @@ union MVKDescriptorSetListItem {
  * Hope: Games will allocate the same set of descriptor sets (and therefore the same sizes) over and over again, so this will work out fine.
  */
 class MVKDescriptorPoolFreeList {
+	// Offsets and sizes are 32-bit, as they are in the descriptor sets that use them.
 	struct Entry {
-		size_t size;
-		std::vector<size_t> items;
-		Entry(size_t size_): size(size_) {}
+		uint32_t size;
+		std::vector<uint32_t> items;
+		Entry(uint32_t size_): size(size_) {}
 	};
 	std::vector<Entry> entries;
-	size_t _freeSize = 0;
+	uint32_t _freeSize = 0;
 
 public:
-	void add(size_t item, size_t size);
-	std::optional<std::pair<size_t, size_t>> get(size_t minSize, size_t maxSize);
+	void add(uint32_t item, uint32_t size);
+	std::optional<std::pair<uint32_t, uint32_t>> get(uint32_t minSize, uint32_t maxSize);
 	void reset();
-	size_t freeSize() const { return _freeSize; }
+	uint32_t freeSize() const { return _freeSize; }
 
 private:
-	std::vector<Entry>::iterator findEntry(size_t size);
+	std::vector<Entry>::iterator findEntry(uint32_t size);
 };
 
 /** Represents a Vulkan descriptor pool. */

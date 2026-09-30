@@ -61,7 +61,7 @@ MVKMTLBufferAllocation* MVKMTLBufferAllocationPool::acquireAllocationUnlocked() 
 
 MVKMTLBufferAllocation* MVKMTLBufferAllocationPool::acquireAllocation() {
     if (_isThreadSafe) {
-        std::lock_guard<std::mutex> lock(_lock);
+        std::lock_guard<MVKUnfairLock> lock(_lock);
         return acquireAllocationUnlocked();
     } else {
         return acquireAllocationUnlocked();
@@ -77,7 +77,7 @@ void MVKMTLBufferAllocationPool::returnAllocationUnlocked(MVKMTLBufferAllocation
 
 void MVKMTLBufferAllocationPool::returnAllocation(MVKMTLBufferAllocation* ba) {
     if (_isThreadSafe) {
-        std::lock_guard<std::mutex> lock(_lock);
+        std::lock_guard<MVKUnfairLock> lock(_lock);
         returnAllocationUnlocked(ba);
     } else {
         returnAllocationUnlocked(ba);
@@ -96,7 +96,7 @@ void MVKMTLBufferAllocationPool::returnAllocations(MVKArrayRef<MVKMTLBufferAlloc
 
 		auto returnRange = [&]() { for (size_t i = start; i < end; i++) { pool->returnAllocationUnlocked(allocations[i]); } };
 		if (pool->_isThreadSafe) {
-			std::lock_guard<std::mutex> lock(pool->_lock);
+			std::lock_guard<MVKUnfairLock> lock(pool->_lock);
 			returnRange();
 		} else {
 			returnRange();
@@ -147,26 +147,45 @@ MVKMTLBufferAllocation* MVKMTLBufferAllocator::acquireMTLBufferRegion(NSUInteger
 
     // Convert max length to the next power-of-two exponent to use as a lookup
     NSUInteger p2Exp = mvkPowerOfTwoExponent(length);
-    return _regionPools[p2Exp]->acquireAllocation();
+    return getRegionPool(p2Exp)->acquireAllocation();
+}
+
+// Returns the pool for the power-of-two exponent, creating it on first use.
+// The pointer is read without the lock on the fast path, and the lock only
+// guards creation, so a pool is created once even when this allocator is shared.
+MVKMTLBufferAllocationPool* MVKMTLBufferAllocator::getRegionPool(NSUInteger p2Exp) {
+	std::atomic<MVKMTLBufferAllocationPool*>& poolSlot = _regionPools[p2Exp];
+	MVKMTLBufferAllocationPool* pool = poolSlot.load(std::memory_order_acquire);
+	if (pool) [[likely]] { return pool; }
+
+	std::lock_guard<MVKUnfairLock> lock(_regionPoolsLock);
+	pool = poolSlot.load(std::memory_order_relaxed);
+	if ( !pool ) {
+		pool = new MVKMTLBufferAllocationPool(_device, (NSUInteger)1 << p2Exp, _isThreadSafe, _isDedicated, _mtlStorageMode);
+		poolSlot.store(pool, std::memory_order_release);
+	}
+	return pool;
 }
 
 MVKMTLBufferAllocator::MVKMTLBufferAllocator(MVKDevice* device, NSUInteger maxRegionLength, bool makeThreadSafe, bool isDedicated, MTLStorageMode mtlStorageMode) : MVKBaseDeviceObject(device) {
 	_maxAllocationLength = std::max<NSUInteger>(maxRegionLength, getMetalFeatures().mtlBufferAlignment);
+	_mtlStorageMode = mtlStorageMode;
 	_isThreadSafe = makeThreadSafe;
+	_isDedicated = isDedicated;
 
-    // Convert max length to the next power-of-two exponent
+    // Convert max length to the next power-of-two exponent, and size the pool slots to cover it.
     NSUInteger maxP2Exp = mvkPowerOfTwoExponent(_maxAllocationLength);
-
-    // Populate the array of region pools to cover the maximum region size
-    _regionPools.reserve(maxP2Exp + 1);
-    NSUInteger allocLen = 1;
-    for (uint32_t p2Exp = 0; p2Exp <= maxP2Exp; p2Exp++) {
-        _regionPools.push_back(new MVKMTLBufferAllocationPool(device, allocLen, makeThreadSafe, isDedicated, mtlStorageMode));
-        allocLen <<= 1;
-    }
+	_regionPoolCount = maxP2Exp + 1;
+	_regionPools.reset(new std::atomic<MVKMTLBufferAllocationPool*>[_regionPoolCount]);
+	for (NSUInteger p2Exp = 0; p2Exp < _regionPoolCount; p2Exp++) {
+		_regionPools[p2Exp].store(nullptr, std::memory_order_relaxed);
+	}
 }
 
 MVKMTLBufferAllocator::~MVKMTLBufferAllocator() {
-    mvkDestroyContainerContents(_regionPools);
+	for (NSUInteger p2Exp = 0; p2Exp < _regionPoolCount; p2Exp++) {
+		MVKMTLBufferAllocationPool* pool = _regionPools[p2Exp].load(std::memory_order_relaxed);
+		if (pool) { pool->destroy(); }
+	}
 }
 

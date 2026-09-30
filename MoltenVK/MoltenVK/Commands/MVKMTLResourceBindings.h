@@ -56,13 +56,12 @@ typedef struct MVKPipelineBarrier {
 		Execution,
 	} MVKPipelineBarrierType;
 
-	MVKPipelineBarrierType type = None;
+	// The 8-byte members come first and the byte-sized ones last, so the struct
+	// carries no padding. It is stored inline in every pipeline barrier command.
 	VkPipelineStageFlags2 srcStageMask = 0;
 	VkAccessFlags2 srcAccessMask = 0;
 	VkPipelineStageFlags2 dstStageMask = 0;
 	VkAccessFlags2 dstAccessMask = 0;
-	uint8_t srcQueueFamilyIndex = 0;
-	uint8_t dstQueueFamilyIndex = 0;
 	union { MVKBuffer* mvkBuffer = nullptr; MVKImage* mvkImage; MVKResource* mvkResource; };
 	union {
 		struct {
@@ -78,6 +77,9 @@ typedef struct MVKPipelineBarrier {
 			uint8_t levelCount;
 		};
 	};
+	MVKPipelineBarrierType type = None;
+	uint8_t srcQueueFamilyIndex = 0;
+	uint8_t dstQueueFamilyIndex = 0;
 
 	bool isMemoryBarrier() { return type == Memory; }
 	bool isBufferBarrier() { return type == Buffer; }
@@ -85,91 +87,91 @@ typedef struct MVKPipelineBarrier {
 
 	MVKPipelineBarrier(VkPipelineStageFlags srcStageMask,
 					   VkPipelineStageFlags dstStageMask) :
-		type(Execution),
 		srcStageMask(srcStageMask),
-		dstStageMask(dstStageMask)
+		dstStageMask(dstStageMask),
+		type(Execution)
 		{}
 
 	MVKPipelineBarrier(const VkMemoryBarrier2& vkBarrier) :
-		type(Memory),
 		srcStageMask(vkBarrier.srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(vkBarrier.dstStageMask),
-		dstAccessMask(vkBarrier.dstAccessMask)
+		dstAccessMask(vkBarrier.dstAccessMask),
+		type(Memory)
 		{}
 
 	MVKPipelineBarrier(const VkMemoryBarrier& vkBarrier,
 					   VkPipelineStageFlags srcStageMask,
 					   VkPipelineStageFlags dstStageMask) :
-		type(Memory),
 		srcStageMask(srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(dstStageMask),
-		dstAccessMask(vkBarrier.dstAccessMask)
+		dstAccessMask(vkBarrier.dstAccessMask),
+		type(Memory)
 		{}
 
 	MVKPipelineBarrier(const VkBufferMemoryBarrier2& vkBarrier) :
-		type(Buffer),
 		srcStageMask(vkBarrier.srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(vkBarrier.dstStageMask),
 		dstAccessMask(vkBarrier.dstAccessMask),
-		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
-		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex),
 		mvkBuffer((MVKBuffer*)vkBarrier.buffer),
 		offset(vkBarrier.offset),
-		size(vkBarrier.size)
+		size(vkBarrier.size),
+		type(Buffer),
+		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
+		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex)
 		{}
 
 	MVKPipelineBarrier(const VkBufferMemoryBarrier& vkBarrier,
 					   VkPipelineStageFlags srcStageMask,
 					   VkPipelineStageFlags dstStageMask) :
-		type(Buffer),
 		srcStageMask(srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(dstStageMask),
 		dstAccessMask(vkBarrier.dstAccessMask),
-		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
-		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex),
 		mvkBuffer((MVKBuffer*)vkBarrier.buffer),
 		offset(vkBarrier.offset),
-		size(vkBarrier.size)
+		size(vkBarrier.size),
+		type(Buffer),
+		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
+		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex)
 		{}
 
 	MVKPipelineBarrier(const VkImageMemoryBarrier2& vkBarrier) :
-		type(Image),
 		srcStageMask(vkBarrier.srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(vkBarrier.dstStageMask),
 		dstAccessMask(vkBarrier.dstAccessMask),
-		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
-		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex),
 		mvkImage((MVKImage*)vkBarrier.image),
 		newLayout(vkBarrier.newLayout),
 		aspectMask(vkBarrier.subresourceRange.aspectMask),
 		baseArrayLayer(vkBarrier.subresourceRange.baseArrayLayer),
 		layerCount(vkBarrier.subresourceRange.layerCount),
 		baseMipLevel(vkBarrier.subresourceRange.baseMipLevel),
-		levelCount(vkBarrier.subresourceRange.levelCount)
+		levelCount(vkBarrier.subresourceRange.levelCount),
+		type(Image),
+		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
+		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex)
 		{}
 
 	MVKPipelineBarrier(const VkImageMemoryBarrier& vkBarrier,
 					   VkPipelineStageFlags srcStageMask,
 					   VkPipelineStageFlags dstStageMask) :
-		type(Image),
 		srcStageMask(srcStageMask),
 		srcAccessMask(vkBarrier.srcAccessMask),
 		dstStageMask(dstStageMask),
 		dstAccessMask(vkBarrier.dstAccessMask),
-		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
-		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex),
 		mvkImage((MVKImage*)vkBarrier.image),
 		newLayout(vkBarrier.newLayout),
 		aspectMask(vkBarrier.subresourceRange.aspectMask),
 		baseArrayLayer(vkBarrier.subresourceRange.baseArrayLayer),
 		layerCount(vkBarrier.subresourceRange.layerCount),
 		baseMipLevel(vkBarrier.subresourceRange.baseMipLevel),
-		levelCount(vkBarrier.subresourceRange.levelCount)
+		levelCount(vkBarrier.subresourceRange.levelCount),
+		type(Image),
+		srcQueueFamilyIndex(vkBarrier.srcQueueFamilyIndex),
+		dstQueueFamilyIndex(vkBarrier.dstQueueFamilyIndex)
 		{}
 
 } MVKPipelineBarrier;
