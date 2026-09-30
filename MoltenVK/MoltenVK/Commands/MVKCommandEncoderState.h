@@ -24,6 +24,7 @@
 #include "MVKPipeline.h"
 #include "MVKSmallVector.h"
 #include "MVKBitArray.h"
+#include "MVKPointerMap.h"
 #include <unordered_map>
 #include <objc/message.h>
 
@@ -148,7 +149,8 @@ struct MVKUseResourceHelper {
 		bool deferred;
 	};
 	MVKOnePerEnumEntry<Entry, MVKResourceUsageStages> entries;
-	std::unordered_map<id<MTLResource>, ResourceInfo> used;
+	/** Resources used on the current Metal encoder. Filled per draw and cleared per encoder, so it keeps its storage. */
+	MVKPointerMap<ResourceInfo> used;
 	/** Add a resource to the list of resources to use. */
 	void add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write);
 	/**

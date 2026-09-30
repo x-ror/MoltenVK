@@ -915,9 +915,9 @@ static bool isCompatible(MVKUseResourceHelper::ResourceInfo current, MVKUseResou
 void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write) {
 	ResourceInfo info { stage, write, true };
 	auto res = used.emplace(resource, info);
-	if (res.second || !isCompatible(res.first->second, info)) {
-		ResourceInfo& stored = res.first->second;
-		if (!res.second) {
+	if (res.inserted || !isCompatible(res.value, info)) {
+		ResourceInfo& stored = res.value;
+		if (!res.inserted) {
 			stored.deferred = true;
 			stored.write |= info.write;
 			stored.stages = combineStages(stored.stages, info.stages);
@@ -929,9 +929,9 @@ void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages 
 void MVKUseResourceHelper::addImmediate(id<MTLResource> resource, id<MTLCommandEncoder> enc, MVKResourceBinder::UseResource func, MVKResourceUsageStages stage, bool write) {
 	ResourceInfo info { stage, write, false };
 	auto res = used.emplace(resource, info);
-	if (res.second || !isCompatible(res.first->second, info)) {
-		ResourceInfo& stored = res.first->second;
-		if (!res.second) {
+	if (res.inserted || !isCompatible(res.value, info)) {
+		ResourceInfo& stored = res.value;
+		if (!res.inserted) {
 			stored.write |= info.write;
 			stored.stages = combineStages(stored.stages, info.stages);
 		}
