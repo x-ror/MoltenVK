@@ -508,6 +508,16 @@ public:
 	/** Indicates whether the current draw is an indexed draw. */
 	bool _isIndexedDraw;
 
+	/**
+	 * Returns whether commands are encoded to Metal as they are recorded, rather than when the
+	 * command buffer is ended or submitted. In that case, descriptor updates made after a
+	 * descriptor set is bound (update-after-bind) can occur between encoded draws.
+	 */
+	bool isEncodingImmediately() const {
+		return (_prefillStyle == MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS_STYLE_IMMEDIATE_ENCODING ||
+				_prefillStyle == MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS_STYLE_IMMEDIATE_ENCODING_NO_AUTORELEASE);
+	}
+
 #pragma mark Construction
 
 	MVKCommandEncoder(MVKCommandBuffer* cmdBuffer,

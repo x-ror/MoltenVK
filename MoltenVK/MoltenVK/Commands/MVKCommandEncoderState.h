@@ -24,6 +24,7 @@
 #include "MVKPipeline.h"
 #include "MVKSmallVector.h"
 #include "MVKBitArray.h"
+#include "MVKPointerMap.h"
 #include <unordered_map>
 #include <objc/message.h>
 
@@ -148,7 +149,8 @@ struct MVKUseResourceHelper {
 		bool deferred;
 	};
 	MVKOnePerEnumEntry<Entry, MVKResourceUsageStages> entries;
-	std::unordered_map<id<MTLResource>, ResourceInfo> used;
+	/** Resources used on the current Metal encoder. Filled per draw and cleared per encoder, so it keeps its storage. */
+	MVKPointerMap<ResourceInfo> used;
 	/** Add a resource to the list of resources to use. */
 	void add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write);
 	/**
@@ -166,7 +168,7 @@ struct MVKUseResourceHelper {
  */
 struct MVKVulkanCommonEncoderState {
 	MVKPipelineLayout* _layout = nullptr;
-	MVKDescriptorSet* _descriptorSets[kMVKMaxDescriptorSetCount];
+	MVKDescriptorSet* _descriptorSets[kMVKMaxDescriptorSetCount] = {};
 	MVKDescriptorSet _pushDescriptor = {};
 	MVKSmallVector<uint8_t, 16> _pushDescData;
 	void ensurePushDescriptorSize(uint32_t size);
@@ -308,6 +310,13 @@ struct MVKMetalGraphicsCommandEncoderStateQuickReset {
 	 */
 	MVKOnePerGraphicsStage<MVKStageResourceBits> _exists;
 
+	/**
+	 * The pipeline stage resources whose descriptor bind script was last fully executed on each
+	 * stage, with no descriptor-slot change since. Null (as after a reset) means the script must run.
+	 * See bindMetalResources().
+	 */
+	MVKOnePerGraphicsStage<const MVKPipelineStageResourceInfo*> _boundResources;
+
 	id<MTLRenderPipelineState> _pipeline;
 
 	/** Flags that mark whether a render state matches the current Vulkan render state. */
@@ -357,6 +366,8 @@ struct MVKMetalGraphicsCommandEncoderState : public MVKMetalGraphicsCommandEncod
 
 	/** Mark the given pieces of render state as dirty. */
 	void markDirty(MVKRenderStateFlags flags) { _stateReady.removeAll(flags); }
+	/** Requires the descriptor bind scripts of all stages to run again before the next draw. */
+	void invalidateBoundResources() { _boundResources = {}; }
 	/** Mark everything dirty that needs to be marked when changing pipelines. */
 	void changePipeline(MVKGraphicsPipeline* from, MVKGraphicsPipeline* to);
 
@@ -386,6 +397,9 @@ struct MVKMetalComputeCommandEncoderState {
 	 */
 	MVKStageResourceBits _exists;
 
+	/** The compute equivalent of MVKMetalGraphicsCommandEncoderStateQuickReset::_boundResources. */
+	const MVKPipelineStageResourceInfo* _boundResources;
+
 	id<MTLComputePipelineState> _pipeline;
 
 	MVKPipeline* _vkPipeline;
@@ -409,6 +423,8 @@ struct MVKMetalComputeCommandEncoderState {
 
 	/** For API compatibility with MVKMetalGraphicsCommandEncoderState. */
 	MVKArrayRef<MVKStageResourceBits> exists() { return {&_exists, 1}; }
+	/** Requires the descriptor bind script to run again before the next dispatch. */
+	void invalidateBoundResources() { _boundResources = nullptr; }
 
 	void reset();
 };
@@ -429,7 +445,7 @@ class MVKCommandEncoderState {
 		Compute
 	};
 	/** The type of Metal encoder, if any, that is currently active. */
-	CommandEncoderClass _mtlActiveEncoder;
+	CommandEncoderClass _mtlActiveEncoder = CommandEncoderClass::None;
 
 	/** Get the encoder state associated with the given bind point, or nullptr if the bindPoint isn't supported. */
 	MVKVulkanCommonEncoderState* getVkEncoderState(VkPipelineBindPoint bindPoint);

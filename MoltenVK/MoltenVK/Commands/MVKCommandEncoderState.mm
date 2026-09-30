@@ -629,6 +629,30 @@ static MVKResourceUsageStages combineStages(MVKResourceUsageStages a, MVKResourc
 	return MVKResourceUsageStages::All;
 }
 
+// In debug mode, verifies that skipping the bind script was correct, by running it against copies of
+// the binding state with a nil encoder (so no Metal calls are made), and comparing the result with the
+// current binding state. If they differ, an invalidation is missing somewhere; report it, and bind for real.
+static bool verifyBoundResources(MVKCommandEncoder& mvkEncoder,
+                                 const MVKVulkanCommonEncoderState& common,
+                                 const MVKPipelineStageResourceInfo& resources,
+                                 const MVKImplicitBufferData& implicitBufferData,
+                                 MVKResourceUsageStages useResourceStage,
+                                 const MVKStageResourceBits& exists,
+                                 const MVKStageResourceBindings& bindings,
+                                 const MVKResourceBinder& RESTRICT binder) {
+	MVKStageResourceBits expectedExists = exists;
+	MVKStageResourceBindings expectedBindings = bindings;
+	executeBindOps(nil, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, expectedExists, expectedBindings, binder);
+	bool isValid = (expectedExists.allBits == exists.allBits &&
+	                mvkAreEqual(expectedBindings.textures, bindings.textures, kMVKMaxTextureCount) &&
+	                mvkAreEqual(expectedBindings.buffers,  bindings.buffers,  kMVKMaxBufferCount) &&
+	                mvkAreEqual(expectedBindings.samplers, bindings.samplers, kMVKMaxSamplerCount));
+	if ( !isValid ) {
+		mvkEncoder.reportError(VK_ERROR_UNKNOWN, "Descriptor bindings changed without invalidating the bound resources. Rebinding.");
+	}
+	return isValid;
+}
+
 static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKCommandEncoder& mvkEncoder,
                                const MVKVulkanCommonEncoderState& common,
@@ -639,18 +663,35 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKResourceUsageStages useResourceStage,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
+                               const MVKPipelineStageResourceInfo*& boundResources,
                                const MVKResourceBinder& RESTRICT binder) {
 	// Clear descriptor set resource use bitarray for new sets and bind them
 	MVKStaticBitSet<kMVKMaxDescriptorSetCount> setsNeeded = resources.resources.descriptorSetData.clearingAllIn(exists.descriptorSetData);
 	exists.descriptorSetData |= resources.resources.descriptorSetData;
+	bool isAnySetNeeded = false;
 	for (size_t idx : setsNeeded) {
+		isAnySetNeeded = true;
 		MVKDescriptorSet* set = common._descriptorSets[idx];
 		const MVKDescriptorSetLayout* layout = common._layout->getDescriptorSetLayout(idx);
 		bindings.descriptorSetResourceUse[idx].resizeAndClear(layout->bindings().size());
 		bindBuffer(encoder, set->gpuBufferObject, set->gpuBufferOffset, idx, exists, bindings, binder);
 	}
 
-	executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+	// The bind script sets every descriptor slot the stage uses, but compares each slot with its tracked
+	// binding first, so re-running it with unchanged inputs makes no Metal calls, while still costing a
+	// walk over all the pipeline's descriptors. Skip it when it was last run for these same resources on
+	// this encoder, and nothing that it reads has changed since: descriptor sets, push descriptors, the
+	// pipeline layout, and the descriptor slots themselves all clear boundResources when they change.
+	// Newly needed sets reset their resource-use tracking, so they require the script to run. With
+	// immediate encoding, update-after-bind descriptors may change between draws, so always run it.
+	bool isBound = (boundResources == &resources && !isAnySetNeeded && !mvkEncoder.isEncodingImmediately());
+	if (isBound && mvkEncoder.getMVKConfig().debugMode) {
+		isBound = verifyBoundResources(mvkEncoder, common, resources, implicitBufferData, useResourceStage, exists, bindings, binder);
+	}
+	if ( !isBound ) {
+		executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+		boundResources = &resources;
+	}
 
 	MVKMetalSharedCommandEncoderState& mtlShared = mvkEncoder.getState().mtlShared();
 	if (resources.usesPhysicalStorageBufferAddresses && !isCompatible(mtlShared._gpuAddressableResourceStages, useResourceStage)) {
@@ -743,6 +784,7 @@ static void bindVulkanGraphicsToMetalGraphics(
 	                   getUseResourceStage(mtlStage),
 	                   mtlState._exists[mtlStage],
 	                   mtlState._bindings[mtlStage],
+	                   mtlState._boundResources[mtlStage],
 	                   MVKResourceBinder::Get(mtlStage));
 }
 
@@ -769,6 +811,7 @@ static void bindVulkanGraphicsToMetalCompute(
 	                   MVKResourceUsageStages::Compute,
 	                   mtlState._exists,
 	                   mtlState._bindings,
+	                   mtlState._boundResources,
 	                   MVKResourceBinder::Compute());
 }
 
@@ -790,6 +833,7 @@ static void bindVulkanComputeToMetalCompute(
 	                   MVKResourceUsageStages::Compute,
 	                   mtlState._exists,
 	                   mtlState._bindings,
+	                   mtlState._boundResources,
 	                   MVKResourceBinder::Compute());
 }
 
@@ -871,9 +915,9 @@ static bool isCompatible(MVKUseResourceHelper::ResourceInfo current, MVKUseResou
 void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write) {
 	ResourceInfo info { stage, write, true };
 	auto res = used.emplace(resource, info);
-	if (res.second || !isCompatible(res.first->second, info)) {
-		ResourceInfo& stored = res.first->second;
-		if (!res.second) {
+	if (res.inserted || !isCompatible(res.value, info)) {
+		ResourceInfo& stored = res.value;
+		if (!res.inserted) {
 			stored.deferred = true;
 			stored.write |= info.write;
 			stored.stages = combineStages(stored.stages, info.stages);
@@ -885,9 +929,9 @@ void MVKUseResourceHelper::add(id<MTLResource> resource, MVKResourceUsageStages 
 void MVKUseResourceHelper::addImmediate(id<MTLResource> resource, id<MTLCommandEncoder> enc, MVKResourceBinder::UseResource func, MVKResourceUsageStages stage, bool write) {
 	ResourceInfo info { stage, write, false };
 	auto res = used.emplace(resource, info);
-	if (res.second || !isCompatible(res.first->second, info)) {
-		ResourceInfo& stored = res.first->second;
-		if (!res.second) {
+	if (res.inserted || !isCompatible(res.value, info)) {
+		ResourceInfo& stored = res.value;
+		if (!res.inserted) {
 			stored.write |= info.write;
 			stored.stages = combineStages(stored.stages, info.stages);
 		}
@@ -1065,27 +1109,35 @@ void MVKMetalGraphicsCommandEncoderState::reset(VkSampleCountFlags sampleCount) 
 }
 
 void MVKMetalGraphicsCommandEncoderState::bindFragmentBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
+	_boundResources.fragment() = nullptr;
 	bindBuffer(encoder, buffer, offset, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindFragmentBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+	_boundResources.fragment() = nullptr;
 	bindBytes(encoder, data, size, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindFragmentTexture(id<MTLRenderCommandEncoder> encoder, id<MTLTexture> texture, NSUInteger index) {
+	_boundResources.fragment() = nullptr;
 	bindTexture(encoder, texture, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindFragmentSampler(id<MTLRenderCommandEncoder> encoder, id<MTLSamplerState> sampler, NSUInteger index) {
+	_boundResources.fragment() = nullptr;
 	bindSampler(encoder, sampler, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindVertexBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
+	_boundResources.vertex() = nullptr;
 	bindBuffer(encoder, buffer, offset, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+	_boundResources.vertex() = nullptr;
 	bindBytes(encoder, data, size, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindVertexTexture(id<MTLRenderCommandEncoder> encoder, id<MTLTexture> texture, NSUInteger index) {
+	_boundResources.vertex() = nullptr;
 	bindTexture(encoder, texture, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
 }
 void MVKMetalGraphicsCommandEncoderState::bindVertexSampler(id<MTLRenderCommandEncoder> encoder, id<MTLSamplerState> sampler, NSUInteger index) {
+	_boundResources.vertex() = nullptr;
 	bindSampler(encoder, sampler, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
 }
 
@@ -1561,15 +1613,19 @@ void MVKMetalComputeCommandEncoderState::bindPipeline(id<MTLComputeCommandEncode
 	}
 }
 void MVKMetalComputeCommandEncoderState::bindBuffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
+	_boundResources = nullptr;
 	::bindBuffer(encoder, buffer, offset, index, _exists, _bindings, MVKComputeBinder());
 }
 void MVKMetalComputeCommandEncoderState::bindBytes(id<MTLComputeCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+	_boundResources = nullptr;
 	::bindBytes(encoder, data, size, index, _exists, _bindings, MVKComputeBinder());
 }
 void MVKMetalComputeCommandEncoderState::bindTexture(id<MTLComputeCommandEncoder> encoder, id<MTLTexture> texture, NSUInteger index) {
+	_boundResources = nullptr;
 	::bindTexture(encoder, texture, index, _exists, _bindings, MVKComputeBinder());
 }
 void MVKMetalComputeCommandEncoderState::bindSampler(id<MTLComputeCommandEncoder> encoder, id<MTLSamplerState> sampler, NSUInteger index) {
+	_boundResources = nullptr;
 	::bindSampler(encoder, sampler, index, _exists, _bindings, MVKComputeBinder());
 }
 
@@ -1733,6 +1789,7 @@ void MVKCommandEncoderState::bindGraphicsPipeline(MVKGraphicsPipeline* pipeline)
 			invalidateImplicitBuffer(*this, VK_PIPELINE_BIND_POINT_GRAPHICS, MVKNonVolatileImplicitBuffer::PushConstant);
 		}
 		_vkGraphics.setLayout(layout);
+		applyToActiveMTLState(VK_PIPELINE_BIND_POINT_GRAPHICS, [](auto& mtl){ mtl.invalidateBoundResources(); });
 	}
 }
 
@@ -1745,6 +1802,7 @@ void MVKCommandEncoderState::bindComputePipeline(MVKComputePipeline* pipeline) {
 			invalidateImplicitBuffer(*this, VK_PIPELINE_BIND_POINT_COMPUTE, MVKNonVolatileImplicitBuffer::PushConstant);
 		}
 		_vkCompute.setLayout(layout);
+		applyToActiveMTLState(VK_PIPELINE_BIND_POINT_COMPUTE, [](auto& mtl){ mtl.invalidateBoundResources(); });
 	}
 }
 
@@ -1765,6 +1823,7 @@ void MVKCommandEncoderState::bindDescriptorSets(
 	auto affected = MVKStaticBitSet<kMVKMaxDescriptorSetCount>::range(firstSet, firstSet + setCount);
 	applyToActiveMTLState(bindPoint, [affected](auto& mtl){
 		invalidateDescriptorSetImplicitBuffers(mtl);
+		mtl.invalidateBoundResources();
 		for (MVKStageResourceBits& exists : mtl.exists()) {
 			exists.descriptorSetData.clearAllIn(affected);
 		}
@@ -1790,6 +1849,7 @@ void MVKCommandEncoderState::pushDescriptorSet(VkPipelineBindPoint bindPoint, MV
 		MVKDescriptorSetLayout* dsl = layout->getDescriptorSetLayout(set);
 		state->ensurePushDescriptorSize(dsl->cpuSize());
 		mvkPushDescriptorSet(state->_pushDescriptor.cpuBuffer, dsl, writeCount, writes);
+		applyToActiveMTLState(bindPoint, [](auto& mtl){ mtl.invalidateBoundResources(); });
 	}
 }
 
@@ -1799,6 +1859,7 @@ void MVKCommandEncoderState::pushDescriptorSet(MVKDescriptorUpdateTemplate* upda
 		MVKDescriptorSetLayout* dsl = layout->getDescriptorSetLayout(set);
 		state->ensurePushDescriptorSize(dsl->cpuSize());
 		mvkPushDescriptorSetTemplate(state->_pushDescriptor.cpuBuffer, dsl, updateTemplate, data);
+		applyToActiveMTLState(updateTemplate->getBindPoint(), [](auto& mtl){ mtl.invalidateBoundResources(); });
 	}
 }
 
