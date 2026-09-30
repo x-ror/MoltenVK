@@ -238,7 +238,7 @@ VkResult MVKCommandBuffer::reset(VkCommandBufferResetFlags flags) {
 	_isReusable = false;
 	_supportsConcurrentExecution = false;
 	_wasExecuted = false;
-	_isExecutingNonConcurrently.clear();
+	_isExecutingNonConcurrently.clear(std::memory_order_release);
 	_commandCount = 0;
 	_currentSubpassInfo = {};
 	_needsVisibilityResultMTLBuffer = false;
@@ -315,7 +315,7 @@ void MVKCommandBuffer::submit(MVKQueueCommandBufferSubmission* cmdBuffSubmit,
 		encoder.encode(cmdBuffSubmit->getActiveMTLCommandBuffer(), pEncodingContext);
 	}
 
-	if ( !_supportsConcurrentExecution ) { _isExecutingNonConcurrently.clear(); }
+	if ( !_supportsConcurrentExecution ) { _isExecutingNonConcurrently.clear(std::memory_order_release); }
 }
 
 bool MVKCommandBuffer::canExecute() {
@@ -329,7 +329,7 @@ bool MVKCommandBuffer::canExecute() {
 	}
 
 	// Do this test last so that _isExecutingNonConcurrently is only set if everything else passes
-	if ( !_supportsConcurrentExecution && _isExecutingNonConcurrently.test_and_set()) {
+	if ( !_supportsConcurrentExecution && _isExecutingNonConcurrently.test_and_set(std::memory_order_acquire)) {
 		setConfigurationResult(reportError(VK_NOT_READY, "Command buffer does not support concurrent execution."));
 		return false;
 	}
@@ -1208,7 +1208,7 @@ const MVKMTLBufferAllocation* MVKCommandEncoder::getTempMTLBuffer(NSUInteger len
 void MVKCommandEncoder::returnTempMTLBuffersOnCompletion() {
 	if (_tempMTLBufferAllocations.empty()) { return; }
 
-	auto* pAllocs = new MVKSmallVector<MVKMTLBufferAllocation*, 16>(_tempMTLBufferAllocations);
+	auto* pAllocs = new MVKSmallVector<MVKMTLBufferAllocation*, 16>(std::move(_tempMTLBufferAllocations));
 	_tempMTLBufferAllocations.clear();
 	[_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
 		MVKMTLBufferAllocationPool::returnAllocations(pAllocs->contents());

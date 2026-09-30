@@ -71,10 +71,15 @@ public:
     MVKResource(MVKDevice* device) : MVKVulkanAPIDeviceObject(device) {}
 
 protected:
+	friend class MVKDevice;
+
+	static constexpr uint32_t kNoDeviceResourceIndex = UINT32_MAX;
+
 	MVKDeviceMemory* _deviceMemory = nullptr;
 	VkDeviceSize _deviceMemoryOffset = 0;
     VkDeviceSize _byteCount = 0;
     VkDeviceSize _byteAlignment = 0;
 	VkExternalMemoryHandleTypeFlags _externalMemoryHandleTypes = 0;
+	uint32_t _deviceResourceIndex = kNoDeviceResourceIndex;		// Index in the device resource list, managed by MVKDevice.
 	bool _requiresDedicatedMemoryAllocation = false;
 };

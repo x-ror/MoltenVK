@@ -172,14 +172,16 @@ static ResourceBinderTable<MVKVertexBufferBinder> GenVertexBufferBinders() {
 	return res;
 }
 
+// Namespace-scope tables are initialized at load time, so lookups on the draw path pay no initialization guard.
+static const ResourceBinderTable<MVKResourceBinder> sResourceBinderTable = GenResourceBinders();
+static const ResourceBinderTable<MVKVertexBufferBinder> sVertexBufferBinderTable = GenVertexBufferBinders();
+
 const MVKResourceBinder& MVKResourceBinder::Get(Stage stage) {
-	static const ResourceBinderTable<MVKResourceBinder> table = GenResourceBinders();
-	return table[stage];
+	return sResourceBinderTable[stage];
 }
 
 const MVKVertexBufferBinder& MVKVertexBufferBinder::Get(Stage stage) {
-	static const ResourceBinderTable<MVKVertexBufferBinder> table = GenVertexBufferBinders();
-	return table[stage];
+	return sVertexBufferBinderTable[stage];
 }
 
 #pragma mark - Resource Binding Functions
@@ -550,10 +552,17 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
                            MVKStageResourceBindings& bindings,
                            const MVKResourceBinder& RESTRICT binder) {
 	bool didUseResource = false;
+	// Ops are grouped by descriptor set, so only look the set and its layout up when the set changes.
+	uint32_t lastSetIdx = UINT32_MAX;
+	MVKDescriptorSet* set = nullptr;
+	MVKDescriptorSetLayout* setLayout = nullptr;
 	for (const MVKDescriptorBindOperation& op : ops) {
-		MVKDescriptorSet* set = common._descriptorSets[op.set];
+		if (op.set != lastSetIdx) {
+			lastSetIdx = op.set;
+			set = common._descriptorSets[op.set];
+			setLayout = common._layout->getDescriptorSetLayout(op.set);
+		}
 		uint32_t target = op.target;
-		MVKDescriptorSetLayout* setLayout = common._layout->getDescriptorSetLayout(op.set);
 		const MVKDescriptorBinding& binding = setLayout->bindings()[op.bindingIdx];
 		const char* src = set->cpuBuffer + binding.cpuOffset + op.offset();
 		const uint32_t* dynOffs = implicitBufferData.dynamicOffsets.data() + op.target2;

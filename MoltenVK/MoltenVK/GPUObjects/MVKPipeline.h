@@ -226,7 +226,7 @@ struct MVKTranslatedVertexBinding {
 /** Describes a vertex buffer binding whose divisor is zero. */
 typedef std::pair<uint32_t, uint32_t> MVKZeroDivisorVertexBinding;
 
-typedef MVKSmallVector<MVKGraphicsStage, 4> MVKPiplineStages;
+typedef MVKArrayRef<const MVKGraphicsStage> MVKPiplineStages;
 
 
 struct MVKPipelineStageResourceInfo {
@@ -242,7 +242,7 @@ class MVKGraphicsPipeline : public MVKPipeline {
 public:
 
 	/** Returns the number and order of stages in this pipeline. Draws commands must encode this pipeline once per stage. */
-	void getStages(MVKPiplineStages& stages);
+	MVKPiplineStages getStages() const;
 
 	/** Called when the pipeline is bound to a command encoder. */
 	void wasBound(MVKCommandEncoder* cmdEncoder);

@@ -46,6 +46,15 @@ render passes get `renderTargetArrayLength` set, and that needs a CTS run on rea
 
 ## 1. Hot-path performance (per draw, per submit, per frame)
 
+**Status:** 1.1 through 1.10 are implemented on this branch, with these scope notes. 1.4 caches
+the command buffer descriptors but keeps the separate error-checking completion handler, since
+folding it into the other handlers would have to cover every caller of `getMTLCommandBuffer()`.
+1.10 adds the early-out before formatting in `reportResult`; the log macros still evaluate
+their arguments. In 1.11, the temp-buffer move, the atomic ordering, the device threadgroup
+limit, the namespace-scope binder tables, the hoisted first-view index, and the templated
+rendering attachment iterator are done; the multiview pipeline-state map and the view-class
+capability precompute are not, as neither is on a per-draw path.
+
 ### 1.1 `getMVKConfig()` is a three-level virtual chain on the per-draw path (M / L)
 `Utility/MVKBaseObject.mm:34-38` resolves the config through `getVulkanAPIObject()` (virtual),
 `getInstance()` (virtual) and `MVKInstance::getMVKConfig()` (virtual). It is called twice per

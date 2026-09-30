@@ -215,7 +215,7 @@ bool MVKTimelineSemaphoreMTLEvent::registerWait(MVKFenceSitter* sitter, const Vk
 	if (addRslt.second) {
 		retain();
 		_device->addSemaphore(&sitter->_blocker);
-		[_mtlEvent notifyListener: sitter->getMTLSharedEventListener()
+		[_mtlEvent notifyListener: _device->getMTLSharedEventListener()
 						  atValue: pWaitInfo->pValues[index]
 							block: ^(id<MTLSharedEvent>, uint64_t) {
 			lock_guard<mutex> blockLock(_lock);
@@ -302,16 +302,6 @@ bool MVKFence::getIsSignaled() {
 	lock_guard<mutex> lock(_lock);
 
 	return _isSignaled;
-}
-
-
-#pragma mark -
-#pragma mark MVKFenceSitter
-
-MTLSharedEventListener* MVKFenceSitter::getMTLSharedEventListener() {
-	// TODO: Use dispatch queue from device?
-	if (!_listener) { _listener = [MTLSharedEventListener new]; }
-	return _listener;
 }
 
 

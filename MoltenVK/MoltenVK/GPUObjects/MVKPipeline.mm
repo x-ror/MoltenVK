@@ -497,12 +497,10 @@ void MVKGraphicsPipeline::wasBound(MVKCommandEncoder* cmdEncoder) {
 	}
 }
 
-void MVKGraphicsPipeline::getStages(MVKPiplineStages& stages) {
-    if (isTessellationPipeline()) {
-        stages.push_back(kMVKGraphicsStageVertex);
-        stages.push_back(kMVKGraphicsStageTessControl);
-    }
-    stages.push_back(kMVKGraphicsStageRasterization);
+// Returns a view of a constant stage sequence, so that draws pay nothing to retrieve it.
+MVKPiplineStages MVKGraphicsPipeline::getStages() const {
+	static constexpr MVKGraphicsStage kAllStages[] = { kMVKGraphicsStageVertex, kMVKGraphicsStageTessControl, kMVKGraphicsStageRasterization };
+	return _isTessellationPipeline ? MVKPiplineStages(kAllStages, 3) : MVKPiplineStages(kAllStages + 2, 1);
 }
 
 static const char vtxCompilerType[] = "Vertex stage pipeline for tessellation";

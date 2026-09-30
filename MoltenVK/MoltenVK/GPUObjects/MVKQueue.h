@@ -24,7 +24,7 @@
 #include "MVKSync.h"
 #include "MVKSmallVector.h"
 #include <mutex>
-#include <condition_variable>
+#include <atomic>
 
 #import <Metal/Metal.h>
 
@@ -80,6 +80,9 @@ public:
 
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_QUEUE; }
+
+	/** Returns the MoltenVK configuration, cached on the device. */
+	const MVKConfiguration& getMVKConfig() final { return _device->getMVKConfig(); }
 
 	/** Returns the debug report object type of this object. */
 	VkDebugReportObjectTypeEXT getVkDebugReportObjectType() override { return VK_DEBUG_REPORT_OBJECT_TYPE_QUEUE_EXT; }
@@ -148,10 +151,9 @@ protected:
 	MVKQueueFamily* _queueFamily;
 	std::string _name;
 	dispatch_queue_t _execQueue;
-	std::mutex _execQueueMutex;
-	std::condition_variable _execQueueConditionVariable;
-	uint32_t _execQueueJobCount = 0;
+	std::atomic<uint32_t> _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+	MTLCommandBufferDescriptor* _mtlCmdBuffDescs[2] = { nil, nil };	// Indexed by retainedReferences.
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;
@@ -163,6 +165,7 @@ protected:
 	MVKGPUCaptureScope* _submissionCaptureScope = nil;
 	float _priority;
 	VkQueueGlobalPriority _globalPriority;
+	bool _isDefaultGPUCaptureScopeQueue = false;
 	uint32_t _index;
 };
 
@@ -221,7 +224,7 @@ protected:
 	MVKDevice* getDevice() { return _queue->getDevice(); }
 
 	MVKQueue* _queue;
-	MVKSmallVector<MVKSemaphoreSubmitInfo> _waitSemaphores;
+	MVKSmallVector<MVKSemaphoreSubmitInfo, 2> _waitSemaphores;
 	uint64_t _creationTime;
 };
 
@@ -269,7 +272,7 @@ protected:
 	virtual void submitCommandBuffers() {}
 
 	MVKCommandEncodingContext _encodingContext;
-	MVKSmallVector<MVKSemaphoreSubmitInfo> _signalSemaphores;
+	MVKSmallVector<MVKSemaphoreSubmitInfo, 2> _signalSemaphores;
 	MVKFence* _fence = nullptr;
 	id<MTLCommandBuffer> _activeMTLCommandBuffer = nil;
 	MVKCommandUse _commandUse = kMVKCommandUseNone;

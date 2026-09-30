@@ -149,21 +149,20 @@ static inline std::string mvkGetVulkanVersionString(uint32_t vkVersion) {
 /** Returns whether the specified positive value is a power-of-two. */
 template<typename T>
 static constexpr bool mvkIsPowerOfTwo(T value) {
-	return value > 0 && ((value & (value - 1)) == 0);
+	return value > 0 && std::has_single_bit(static_cast<std::make_unsigned_t<T>>(value));
 }
 
 /**
  * Ensures the specified positive value is a power-of-two. Returns the specified value
  * if it is a power-of-two value. If it is not, returns the next power-of-two value
  * that is larger than the specified value is returned.
+ *
+ * This implementation returns one for inputs less than or equal to one.
  */
 template<typename T>
 static constexpr T mvkEnsurePowerOfTwo(T value) {
-	if (mvkIsPowerOfTwo(value)) { return value; }
-
-	T pot = 1;
-	while(pot <= value) { pot <<= 1; };
-	return pot;
+	if (value <= 1) { return 1; }
+	return static_cast<T>(std::bit_ceil(static_cast<std::make_unsigned_t<T>>(value)));
 }
 
 /**
@@ -174,17 +173,14 @@ static constexpr T mvkEnsurePowerOfTwo(T value) {
  */
 template<typename T>
 static constexpr T mvkPowerOfTwoExponent(T value) {
-    T p2Value = mvkEnsurePowerOfTwo(value);
-
-    // Count the trailing zeros
-    p2Value = (p2Value ^ (p2Value - 1)) >> 1;  // Set trailing 0s to 1s and zero rest
-    T potExp = 0;
-    while (p2Value) {
-        p2Value >>= 1;
-        potExp++;
-    }
-    return potExp;
+	if (value <= 1) { return 0; }
+	return static_cast<T>(std::bit_width(static_cast<std::make_unsigned_t<T>>(value - 1)));
 }
+
+static_assert(mvkEnsurePowerOfTwo(0) == 1 && mvkEnsurePowerOfTwo(1) == 1 && mvkEnsurePowerOfTwo(2) == 2 &&
+			  mvkEnsurePowerOfTwo(3) == 4 && mvkEnsurePowerOfTwo(4) == 4 && mvkEnsurePowerOfTwo(1025u) == 2048u);
+static_assert(mvkPowerOfTwoExponent(0) == 0 && mvkPowerOfTwoExponent(1) == 0 && mvkPowerOfTwoExponent(2) == 1 &&
+			  mvkPowerOfTwoExponent(3) == 2 && mvkPowerOfTwoExponent(4) == 2 && mvkPowerOfTwoExponent(1025u) == 11u);
 
 /**
  * Aligns the byte reference to the specified alignment, and returns the aligned value,

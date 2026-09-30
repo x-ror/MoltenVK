@@ -429,19 +429,14 @@ public:
 
 	MVKFenceSitter(bool waitAll) : _blocker(waitAll, 0) {}
 
-	~MVKFenceSitter() override { [_listener release]; }
-
 private:
 	friend class MVKFence;
 	friend class MVKTimelineSemaphoreMTLEvent;
-
-	MTLSharedEventListener* getMTLSharedEventListener();
 
 	void await() { _blocker.reserve(); }
 	void signaled() { _blocker.release(); }
 
 	MVKSemaphoreImpl _blocker;
-	MTLSharedEventListener* _listener = nil;
 };
 
 

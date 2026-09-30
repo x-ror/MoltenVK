@@ -1723,7 +1723,7 @@ void MVKCmdFillBuffer::encode(MVKCommandEncoder* cmdEncoder) {
 	// Some GPU's report different values for max threadgroup width between the pipeline state and device,
 	// so conservatively use the minimum of these two reported values.
 	id<MTLComputePipelineState> cps = cmdEncoder->getCommandEncodingPool()->getCmdFillBufferMTLComputePipelineState();
-	NSUInteger tgWidth = std::min(cps.maxTotalThreadsPerThreadgroup, cmdEncoder->getMTLDevice().maxThreadsPerThreadgroup.width);
+	NSUInteger tgWidth = std::min(cps.maxTotalThreadsPerThreadgroup, (NSUInteger)cmdEncoder->getDeviceProperties().limits.maxComputeWorkGroupSize[0]);
 	NSUInteger tgCount = _wordCount / tgWidth;
 
 	id<MTLComputeCommandEncoder> mtlComputeEnc = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseFillBuffer);

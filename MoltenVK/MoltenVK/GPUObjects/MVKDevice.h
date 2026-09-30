@@ -658,6 +658,13 @@ public:
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_DEVICE; }
 
+	/**
+	 * Returns the MoltenVK configuration for this device. The configuration is fixed
+	 * once the instance has been created, so it is cached here, and this accessor is
+	 * final so that calls through a device pointer can be resolved without dispatch.
+	 */
+	const MVKConfiguration& getMVKConfig() final { return *_pMVKConfig; }
+
 	/** Returns the debug report object type of this object. */
 	VkDebugReportObjectTypeEXT getVkDebugReportObjectType() override { return VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT; }
 
@@ -1042,18 +1049,26 @@ public:
 
 #pragma mark Barriers
 
-	/** Returns a Metal fence to update for the given barrier stage. */
-	id<MTLFence> getBarrierStageFence(id<MTLCommandBuffer> mtlCommandBuffer, MVKBarrierStage stage);
-
 	/** Returns a Metal fence by its stage and slot index. */
 	id<MTLFence> getFence(MVKBarrierStage stage, int index) {
 		return _barrierFences[stage][index];
 	}
 
+#pragma mark Synchronization
+
+	/**
+	 * Returns the MTLSharedEventListener used to wait on MTLSharedEvents from the host,
+	 * lazily creating it on first use. One listener, and its dispatch queue, is shared
+	 * by every wait on this device.
+	 */
+	MTLSharedEventListener* getMTLSharedEventListener();
+
 protected:
 	friend class MVKDeviceTrackingMixin;
 
 	void propagateDebugName() override  {}
+	void addResource(MVKResource* rez);
+	void removeResource(MVKResource* rez);
 	MVKBuffer* addBuffer(MVKBuffer* mvkBuff);
 	MVKBuffer* removeBuffer(MVKBuffer* mvkBuff);
 	MVKImage* addImage(MVKImage* mvkImg);
@@ -1079,6 +1094,7 @@ protected:
 	bool readGPUCapturePipe() { char dummy; return _capturePipeFileDesc >= 0 && read(_capturePipeFileDesc, &dummy, 1) > 0; };
 
 	MVKPhysicalDevice* _physicalDevice = nullptr;
+	const MVKConfiguration* _pMVKConfig;
 	MVKExtensionList _enabledExtensions;
 	VkPhysicalDeviceFeatures _enabledFeatures;
 	MVKPhysicalDeviceVulkan12NoExtFeatures _enabledVulkan12NoExtFeatures;
@@ -1104,6 +1120,8 @@ protected:
 	MVKSmallVector<std::pair<MVKTimelineSemaphore*, uint64_t>> _awaitingTimelineSem4s;
 	MVKSmallVector<MVKVisibilityBuffer> _visibilityBuffers;
 	MVKLiveResourceSet _liveResources;
+	MTLSharedEventListener* _mtlSharedEventListener = nil;
+	std::once_flag _mtlSharedEventListenerOnce;
 	std::mutex _rezLock;
 	std::mutex _sem4Lock;
     std::mutex _perfLock;
@@ -1225,6 +1243,9 @@ class MVKBaseDeviceObject : public MVKBaseObject, public MVKDeviceTrackingMixin 
 
 public:
 
+	/** Returns the MoltenVK configuration, cached on the device. */
+	const MVKConfiguration& getMVKConfig() override { return _device ? _device->getMVKConfig() : MVKBaseObject::getMVKConfig(); }
+
 	/** Constructs an instance for the specified device. */
 	MVKBaseDeviceObject(MVKDevice* device) : MVKDeviceTrackingMixin(device) {}
 };
@@ -1237,6 +1258,9 @@ public:
 class MVKVulkanAPIDeviceObject : public MVKVulkanAPIObject, public MVKDeviceTrackingMixin {
 
 public:
+
+	/** Returns the MoltenVK configuration, cached on the device. */
+	const MVKConfiguration& getMVKConfig() override { return _device ? _device->getMVKConfig() : MVKVulkanAPIObject::getMVKConfig(); }
 
 	/** Returns a pointer to the Vulkan instance. */
 	MVKInstance* getInstance() override { return _device ? _device->getInstance() : nullptr; }

@@ -3852,7 +3852,7 @@ uint32_t MVKVisibilityBuffer::advanceOffset() {
 // Returns core device commands and enabled extension device commands.
 PFN_vkVoidFunction MVKDevice::getProcAddr(const char* pName) {
 	MVKInstance* pMVKInst = _physicalDevice->_mvkInstance;
-	MVKEntryPoint* pMVKPA = pMVKInst->getEntryPoint(pName);
+	const MVKEntryPoint* pMVKPA = pMVKInst->getEntryPoint(pName);
 	uint32_t apiVersion = pMVKInst->_appInfo.apiVersion;
 
 	bool isSupported = (pMVKPA &&																			// Command exists and...
@@ -4617,11 +4617,30 @@ void MVKDevice::destroyPrivateDataSlot(VkPrivateDataSlot privateDataSlot,
 // the GPU might not be aware that the MTLBuffer needs to be made resident.
 // Track the buffer as needing to be made resident if a shader is bound that uses
 // PhysicalStorageBufferAddresses to access the contents of the underlying MTLBuffer.
+// The resource list is unordered. Each resource remembers its index in the list,
+// so it can be removed in constant time by moving the last resource into its slot.
+// Must be called with _rezLock held.
+void MVKDevice::addResource(MVKResource* rez) {
+	rez->_deviceResourceIndex = (uint32_t)_resources.size();
+	_resources.push_back(rez);
+}
+
+// Must be called with _rezLock held.
+void MVKDevice::removeResource(MVKResource* rez) {
+	uint32_t rezIdx = rez->_deviceResourceIndex;
+	if (rezIdx >= _resources.size() || _resources[rezIdx] != rez) { return; }
+	MVKResource* lastRez = _resources.back();
+	_resources[rezIdx] = lastRez;
+	lastRez->_deviceResourceIndex = rezIdx;
+	_resources.pop_back();
+	rez->_deviceResourceIndex = MVKResource::kNoDeviceResourceIndex;
+}
+
 MVKBuffer* MVKDevice::addBuffer(MVKBuffer* mvkBuff) {
 	if ( !mvkBuff ) { return mvkBuff; }
 
 	lock_guard<mutex> lock(_rezLock);
-	_resources.push_back(mvkBuff);
+	addResource(mvkBuff);
 	if (mvkIsAnyFlagEnabled(mvkBuff->getUsage(), VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT)) {
 		_gpuAddressableBuffers.push_back(mvkBuff);
 	}
@@ -4632,7 +4651,7 @@ MVKBuffer* MVKDevice::removeBuffer(MVKBuffer* mvkBuff) {
 	if ( !mvkBuff ) { return mvkBuff; }
 
 	lock_guard<mutex> lock(_rezLock);
-	mvkRemoveFirstOccurance(_resources, mvkBuff);
+	removeResource(mvkBuff);
 	if (mvkIsAnyFlagEnabled(mvkBuff->getUsage(), VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT)) {
 		mvkRemoveFirstOccurance(_gpuAddressableBuffers, mvkBuff);
 	}
@@ -4651,7 +4670,7 @@ MVKImage* MVKDevice::addImage(MVKImage* mvkImg) {
 
 	lock_guard<mutex> lock(_rezLock);
 	for (auto& mb : mvkImg->_memoryBindings) {
-		_resources.push_back(mb);
+		addResource(mb);
 	}
 	return mvkImg;
 }
@@ -4661,9 +4680,16 @@ MVKImage* MVKDevice::removeImage(MVKImage* mvkImg) {
 
 	lock_guard<mutex> lock(_rezLock);
 	for (auto& mb : mvkImg->_memoryBindings) {
-		mvkRemoveFirstOccurance(_resources, mb);
+		removeResource(mb);
 	}
 	return mvkImg;
+}
+
+MTLSharedEventListener* MVKDevice::getMTLSharedEventListener() {
+	std::call_once(_mtlSharedEventListenerOnce, [this]() {
+		_mtlSharedEventListener = [MTLSharedEventListener new];		// retained
+	});
+	return _mtlSharedEventListener;
 }
 
 void MVKDevice::addSemaphore(MVKSemaphoreImpl* sem4) {
@@ -5169,7 +5195,9 @@ static NSString *mvkBarrierStageName(MVKBarrierStage stage) {
 	}
 }
 
-MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo* pCreateInfo) : _enabledExtensions(this) {
+MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo* pCreateInfo) :
+	_pMVKConfig(&physicalDevice->getInstance()->getMVKConfig()),
+	_enabledExtensions(this) {
 
 	// If the physical device is lost, bail.
 	// Must have initialized everything accessed in destructor to null.
@@ -5590,6 +5618,7 @@ MVKDevice::~MVKDevice() {
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 
 	for (auto &fences: _barrierFences) for (auto fence: fences) [fence release];
+	[_mtlSharedEventListener release];
 
 #if MVK_XCODE_16
 	[_residencySet release];

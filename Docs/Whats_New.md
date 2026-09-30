@@ -42,6 +42,10 @@ Released TBD
 - Fix `MVKSmallVector` copy assignment not compiling, reverse iteration over pointer vectors being empty, and mark its move operations `noexcept`.
 - Fix `vkCmdBeginRenderPass()` with two clear values being recorded into the wrong command pool.
 - Fix an uninitialized descriptor pool free-list size, a missing `break` when reading `VkExportMetalObjectCreateInfoEXT` during memory allocation, stale `pNext` pointers kept in recorded dynamic rendering attachments, a leaked Metal command buffer label per queue, and a missing `default` in `mvkMTLIndexTypeSizeInBytes()`.
+- Cache the MoltenVK configuration on `VkDevice` objects, so reading it on the draw and submit paths no longer walks a chain of virtual calls.
+- Remove buffers and images from the device resource list in constant time, share one `MTLSharedEventListener` per device for host waits on timeline semaphores, and cut per-submit allocations and locking in `vkQueueSubmit()` and `vkQueueWaitIdle()`.
+- Look up `vkGetInstanceProcAddr()` and `vkGetDeviceProcAddr()` names without allocating, and build the entry point table once per process with extension names resolved to indexes.
+- Use C++20 `<bit>` operations for power-of-two, mipmap level, and multiview view-mask computations, and avoid per-draw work when retrieving pipeline stages, binding descriptor sets, and tracing Vulkan calls when tracing is off.
 
 
 

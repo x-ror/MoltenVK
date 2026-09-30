@@ -145,6 +145,17 @@ bool MVKExtensionList::isEnabled(const char* extnName) const {
 	return false;
 }
 
+int32_t MVKExtensionList::getIndexOfExtension(const char* extnName) {
+	if ( !extnName ) { return -1; }
+
+	int32_t extnIdx = 0;
+#define MVK_EXTENSION(var, EXT, type, macos, ios, xros) \
+	if (mvkStringsAreEqual(kVkExtProps_ ##EXT.extensionName, extnName)) { return extnIdx; } \
+	extnIdx++;
+#include "MVKExtensions.def"
+	return -1;
+}
+
 void MVKExtensionList::enable(const char* extnName) {
 	uint32_t extnCnt = getCount();
 	MVKExtension* extnAry = &extensionArray;

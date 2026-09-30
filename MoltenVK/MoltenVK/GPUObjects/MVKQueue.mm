@@ -85,15 +85,15 @@ VkResult MVKQueue::submit(MVKQueueSubmission* qSubmit) {
 	// The submissions will ensure a misconfiguration will be safe to execute.
 	VkResult rslt = qSubmit->getConfigurationResult();
 	if (_execQueue) {
-		std::unique_lock lock(_execQueueMutex);
-		_execQueueJobCount++;
+		_execQueueJobCount.fetch_add(1, std::memory_order_relaxed);
 
 		dispatch_async(_execQueue, ^{
 			execute(qSubmit);
 
-			std::unique_lock execLock(_execQueueMutex);
-			if (!--_execQueueJobCount)
-				_execQueueConditionVariable.notify_all();
+			// Wake any waitIdle() caller once the last job has finished.
+			if (_execQueueJobCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+				_execQueueJobCount.notify_all();
+			}
 		} );
 	} else {
 		rslt = execute(qSubmit);
@@ -151,9 +151,11 @@ VkResult MVKQueue::submit(const VkPresentInfoKHR* pPresentInfo) {
 
 VkResult MVKQueue::waitIdle(MVKCommandUse cmdUse) {
 	if (_execQueue) {
-		std::unique_lock lock(_execQueueMutex);
-		while (_execQueueJobCount)
-			_execQueueConditionVariable.wait(lock);
+		for (uint32_t jobCnt = _execQueueJobCount.load(std::memory_order_acquire);
+			 jobCnt != 0;
+			 jobCnt = _execQueueJobCount.load(std::memory_order_acquire)) {
+			_execQueueJobCount.wait(jobCnt, std::memory_order_acquire);
+		}
 	}
 	@autoreleasepool {
 		auto* mtlCmdBuff = getMTLCommandBuffer(cmdUse);
@@ -167,13 +169,7 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 	id<MTLCommandBuffer> mtlCmdBuff = nil;
 	uint64_t startTime = getPerformanceTimestamp();
 
-	MTLCommandBufferDescriptor* mtlCmdBuffDesc = [MTLCommandBufferDescriptor new];	// temp retain
-	mtlCmdBuffDesc.retainedReferences = retainRefs;
-	if (getMVKConfig().debugMode) {
-		mtlCmdBuffDesc.errorOptions |= MTLCommandBufferErrorOptionEncoderExecutionStatus;
-	}
-	mtlCmdBuff = [_mtlQueue commandBufferWithDescriptor: mtlCmdBuffDesc];
-	[mtlCmdBuffDesc release];														// temp release
+	mtlCmdBuff = [_mtlQueue commandBufferWithDescriptor: _mtlCmdBuffDescs[retainRefs ? 1 : 0]];
 
 	addPerformanceInterval(getPerformanceStats().queue.retrieveMTLCommandBuffer, startTime);
 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
@@ -330,9 +326,20 @@ void MVKQueue::initMTLCommandQueue() {
 	_mtlQueue = _queueFamily->getMTLCommandQueue(_index);	// not retained (cached in queue family)
 	_device->addResidencySet(_mtlQueue);
 
+	// The command buffer descriptors do not change after this, so create one per retainedReferences value.
+	for (uint32_t retainRefs = 0; retainRefs < 2; retainRefs++) {
+		MTLCommandBufferDescriptor* mtlCmdBuffDesc = [MTLCommandBufferDescriptor new];		// retained
+		mtlCmdBuffDesc.retainedReferences = retainRefs;
+		if (getMVKConfig().debugMode) {
+			mtlCmdBuffDesc.errorOptions |= MTLCommandBufferErrorOptionEncoderExecutionStatus;
+		}
+		_mtlCmdBuffDescs[retainRefs] = mtlCmdBuffDesc;
+	}
+
 	_submissionCaptureScope = new MVKGPUCaptureScope(this);
-	if (_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
-		_index == getMVKConfig().defaultGPUCaptureScopeQueueIndex) {
+	_isDefaultGPUCaptureScopeQueue = (_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
+									  _index == getMVKConfig().defaultGPUCaptureScopeQueueIndex);
+	if (_isDefaultGPUCaptureScopeQueue) {
 		getDevice()->startAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_FRAME, _mtlQueue);
 		_submissionCaptureScope->makeDefault();
 	}
@@ -352,6 +359,8 @@ MVKQueue::~MVKQueue() {
 	[_mtlCmdBuffLabelAcquireNextImage release];
 	[_mtlCmdBuffLabelInvalidateMappedMemoryRanges release];
 	[_mtlCmdBuffLabelCopyImageToMemory release];
+	[_mtlCmdBuffDescs[0] release];
+	[_mtlCmdBuffDescs[1] release];
 }
 
 // Destroys the execution dispatch queue.
@@ -731,8 +740,7 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 		setConfigurationResult(_presentInfo[i].presentableImage->presentCAMetalDrawable(mtlCmdBuff, _presentInfo[i]));
 	}
 
-	if (_queue->_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
-		_queue->_index == getMVKConfig().defaultGPUCaptureScopeQueueIndex) {
+	if (_queue->_isDefaultGPUCaptureScopeQueue) {
 		getDevice()->stopAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_ON_DEMAND);
 		getDevice()->startAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_ON_DEMAND, _queue->getMTLCommandQueue());
 	}
@@ -759,8 +767,7 @@ void MVKQueuePresentSurfaceSubmission::finish() {
 	auto cs = _queue->_submissionCaptureScope;
 	cs->endScope();
 	cs->beginScope();
-	if (_queue->_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
-		_queue->_index == getMVKConfig().defaultGPUCaptureScopeQueueIndex) {
+	if (_queue->_isDefaultGPUCaptureScopeQueue) {
 		getDevice()->stopAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_FRAME);
 	}
 

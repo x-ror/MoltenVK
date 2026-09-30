@@ -284,13 +284,7 @@ MVK_PUBLIC_SYMBOL int32_t mvkVkClearColorIntValueFromVkComponentSwizzle(int32_t 
 
 MVK_PUBLIC_SYMBOL uint32_t mvkMipmapLevels(uint32_t dim) {
 	if ( !mvkIsPowerOfTwo(dim) ) { return 0; }
-
-	uint32_t exp = 0;
-	while (dim) {
-		exp++;
-		dim >>= 1;
-	}
-	return exp;
+	return std::bit_width(dim);
 }
 
 MVK_PUBLIC_SYMBOL uint32_t mvkMipmapLevels2D(VkExtent2D extent) {

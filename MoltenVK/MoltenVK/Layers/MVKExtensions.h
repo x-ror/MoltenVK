@@ -67,6 +67,16 @@ public:
 	/** Returns whether the named extension is enabled. */
 	bool isEnabled(const char* extnName) const;
 
+	/** Returns whether the extension at the specified index in this list is enabled. */
+	bool isEnabledAtIndex(uint32_t extnIdx) const { return (&extensionArray)[extnIdx].enabled; }
+
+	/**
+	 * Returns the index of the named extension in this list, or -1 if the extension
+	 * is not known to MoltenVK. The index is the same for every MVKExtensionList,
+	 * so it can be resolved once and used with isEnabledAtIndex() on any list.
+	 */
+	static int32_t getIndexOfExtension(const char* extnName);
+
 	/** Enables the named extension. */
 	void enable(const char* extnName);
 

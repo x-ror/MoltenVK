@@ -187,8 +187,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
     cmdEncoder->_isIndexedDraw = false;
 
-	MVKPiplineStages stages;
-    pipeline->getStages(stages);
+	MVKPiplineStages stages = pipeline->getStages();
 
     const MVKMTLBufferAllocation* vtxOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcOutBuff = nullptr;
@@ -404,7 +403,7 @@ static const MVKMTLBufferAllocation* convertUint8IndexBuffer(MVKCommandEncoder* 
     // Some GPU's report different values for max threadgroup width between the pipeline state and device,
     // so conservatively use the minimum of these two reported values.
     id<MTLComputePipelineState> cps = cmdEncoder->getCommandEncodingPool()->getConvertUint8IndicesMTLComputePipelineState();
-    NSUInteger tgWidth = std::min(cps.maxTotalThreadsPerThreadgroup, cmdEncoder->getMTLDevice().maxThreadsPerThreadgroup.width);
+    NSUInteger tgWidth = std::min(cps.maxTotalThreadsPerThreadgroup, (NSUInteger)cmdEncoder->getDeviceProperties().limits.maxComputeWorkGroupSize[0]);
     NSUInteger tgCount = numIndices / tgWidth;
 
     MVKMetalComputeCommandEncoderState& state = cmdEncoder->getMtlCompute();
@@ -456,8 +455,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 
     cmdEncoder->_isIndexedDraw = true;
 
-	MVKPiplineStages stages;
-    pipeline->getStages(stages);
+	MVKPiplineStages stages = pipeline->getStages();
 
     MVKIndexMTLBufferBinding ibb = cmdEncoder->getVkGraphics()._indexBuffer;
     if (ibb.vkIndexType == VK_INDEX_TYPE_UINT8) {
@@ -960,8 +958,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
         mtlIndBuffOfst = tempIndirectBuff->_offset;
     }
 
-	MVKPiplineStages stages;
-    pipeline->getStages(stages);
+	MVKPiplineStages stages = pipeline->getStages();
 
     if (pipeline->needsDrawIdBuffer()) {
         tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(_drawCount * sizeof(uint32_t));
@@ -1335,8 +1332,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
 		}
     }
 
-	MVKPiplineStages stages;
-    pipeline->getStages(stages);
+	MVKPiplineStages stages = pipeline->getStages();
 
     if (pipeline->needsDrawIdBuffer()) {
         tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(_drawCount * sizeof(uint32_t));

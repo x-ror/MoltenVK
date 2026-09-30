@@ -101,6 +101,9 @@ public:
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_COMMAND_BUFFER; }
 
+	/** Returns the MoltenVK configuration, cached on the device. */
+	const MVKConfiguration& getMVKConfig() final { return _device->getMVKConfig(); }
+
 	/** Returns the debug report object type of this object. */
 	VkDebugReportObjectTypeEXT getVkDebugReportObjectType() override { return VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT; }
 
@@ -247,6 +250,9 @@ typedef std::unordered_map<MVKQueryPool*, MVKSmallVector<uint32_t, kMVKDefaultQu
 class MVKCommandEncoder : public MVKBaseDeviceObject {
 
 public:
+
+	/** Returns the MoltenVK configuration, cached on the device. Final, so calls on an encoder need no dispatch. */
+	const MVKConfiguration& getMVKConfig() final { return _device->getMVKConfig(); }
 
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return _cmdBuffer->getVulkanAPIObject(); };
