@@ -455,6 +455,14 @@ on it transitively. `mvkValidateCerealArchiveSize` is unchanged.
 
 ## 7. GPU-side helper kernels
 
+**Status:** both items are implemented on this branch. `cmdCopyBufferBytes` runs one thread per
+byte and ignores threads past the end, so it also works when the device lacks non-uniform
+threadgroups. The array clear and resolve kernels take a `uint3` position, with the slice in
+`pos.z`, and ignore slices past the array size. Their dispatch sites in `MVKCmdTransfer.mm` and
+`MVKRenderPass.mm` set the grid depth to the texture's array length. The MSL was not compiled
+here. A CPU simulation of the old and new kernels, over grids rounded up to whole threadgroups,
+produced identical writes. It still needs a Metal build and a CTS run.
+
 Outside the CPU focus of this review but noticed in
 `Commands/MVKCommandPipelineStateFactoryShaderSource.h`:
 

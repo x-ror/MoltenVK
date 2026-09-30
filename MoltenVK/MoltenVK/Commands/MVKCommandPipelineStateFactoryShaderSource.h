@@ -102,11 +102,13 @@ typedef struct {
 	uint32_t size;
 } CopyInfo;
 
+// One thread per byte. The grid may be rounded up to whole threadgroups, so threads past the end do nothing.
 kernel void cmdCopyBufferBytes(device uint8_t* src [[ buffer(0) ]],
                                device uint8_t* dst [[ buffer(1) ]],
-                               constant CopyInfo& info [[ buffer(2) ]]) {
-	for (size_t i = 0; i < info.size; i++) {
-		dst[i + info.dstOffset] = src[i + info.srcOffset];
+                               constant CopyInfo& info [[ buffer(2) ]],
+                               uint pos [[thread_position_in_grid]]) {
+	if (pos < info.size) {
+		dst[pos + info.dstOffset] = src[pos + info.srcOffset];
 	}
 }
 
@@ -122,11 +124,12 @@ kernel void cmdClearColorImage2DFloat(texture2d<float, access::write> dst [[ tex
 	dst.write(clearValue, pos);
 }
 
+// The grid depth is the array size, so each thread clears one texel of one slice.
 kernel void cmdClearColorImage2DFloatArray(texture2d_array<float, access::write> dst [[ texture(0) ]],
                                            constant float4& clearValue [[ buffer(0) ]],
-                                           uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < dst.get_array_size(); ++i) {
-		dst.write(clearValue, pos, i);
+                                           uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < dst.get_array_size()) {
+		dst.write(clearValue, pos.xy, pos.z);
 	}
 }
 
@@ -136,11 +139,12 @@ kernel void cmdClearColorImage2DUInt(texture2d<uint, access::write> dst [[ textu
 	dst.write(clearValue, pos);
 }
 
+// The grid depth is the array size, so each thread clears one texel of one slice.
 kernel void cmdClearColorImage2DUIntArray(texture2d_array<uint, access::write> dst [[ texture(0) ]],
                                           constant uint4& clearValue [[ buffer(0) ]],
-                                          uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < dst.get_array_size(); ++i) {
-		dst.write(clearValue, pos, i);
+                                          uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < dst.get_array_size()) {
+		dst.write(clearValue, pos.xy, pos.z);
 	}
 }
 
@@ -150,11 +154,12 @@ kernel void cmdClearColorImage2DInt(texture2d<int, access::write> dst [[ texture
 	dst.write(clearValue, pos);
 }
 
+// The grid depth is the array size, so each thread clears one texel of one slice.
 kernel void cmdClearColorImage2DIntArray(texture2d_array<int, access::write> dst [[ texture(0) ]],
                                          constant int4& clearValue [[ buffer(0) ]],
-                                         uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < dst.get_array_size(); ++i) {
-		dst.write(clearValue, pos, i);
+                                         uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < dst.get_array_size()) {
+		dst.write(clearValue, pos.xy, pos.z);
 	}
 }
 
@@ -165,11 +170,12 @@ kernel void cmdResolveColorImage2DFloat(texture2d<float, access::write> dst [[ t
 }
 
 #if __HAVE_TEXTURE_2D_MS_ARRAY__
+// The grid depth is the array size, so each thread resolves one texel of one slice.
 kernel void cmdResolveColorImage2DFloatArray(texture2d_array<float, access::write> dst [[ texture(0) ]],
                                              texture2d_ms_array<float, access::read> src [[ texture(1) ]],
-                                             uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < src.get_array_size(); ++i) {
-		dst.write(src.read(pos, i, 0), pos, i);
+                                             uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < src.get_array_size()) {
+		dst.write(src.read(pos.xy, pos.z, 0), pos.xy, pos.z);
 	}
 }
 #endif
@@ -181,11 +187,12 @@ kernel void cmdResolveColorImage2DUInt(texture2d<uint, access::write> dst [[ tex
 }
 
 #if __HAVE_TEXTURE_2D_MS_ARRAY__
+// The grid depth is the array size, so each thread resolves one texel of one slice.
 kernel void cmdResolveColorImage2DUIntArray(texture2d_array<uint, access::write> dst [[ texture(0) ]],
                                             texture2d_ms_array<uint, access::read> src [[ texture(1) ]],
-                                            uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < src.get_array_size(); ++i) {
-		dst.write(src.read(pos, i, 0), pos, i);
+                                            uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < src.get_array_size()) {
+		dst.write(src.read(pos.xy, pos.z, 0), pos.xy, pos.z);
 	}
 }
 #endif
@@ -197,11 +204,12 @@ kernel void cmdResolveColorImage2DInt(texture2d<int, access::write> dst [[ textu
 }
 
 #if __HAVE_TEXTURE_2D_MS_ARRAY__
+// The grid depth is the array size, so each thread resolves one texel of one slice.
 kernel void cmdResolveColorImage2DIntArray(texture2d_array<int, access::write> dst [[ texture(0) ]],
                                            texture2d_ms_array<int, access::read> src [[ texture(1) ]],
-                                           uint2 pos [[thread_position_in_grid]]) {
-	for (uint i = 0u; i < src.get_array_size(); ++i) {
-		dst.write(src.read(pos, i, 0), pos, i);
+                                           uint3 pos [[thread_position_in_grid]]) {
+	if (pos.z < src.get_array_size()) {
+		dst.write(src.read(pos.xy, pos.z, 0), pos.xy, pos.z);
 	}
 }
 #endif

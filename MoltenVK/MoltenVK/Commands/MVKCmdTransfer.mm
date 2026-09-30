@@ -1047,14 +1047,22 @@ void MVKCmdCopyBuffer<N>::encode(MVKCommandEncoder* cmdEncoder) {
 				.size = (uint32_t)cpyRgn.size,
 			};
 
+			id<MTLComputePipelineState> mtlCopyState = cmdEncoder->getCommandEncodingPool()->getCmdCopyBufferBytesMTLComputePipelineState();
 			id<MTLComputeCommandEncoder> mtlComputeEnc = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseCopyBuffer);
 			MVKMetalComputeCommandEncoderState& state = cmdEncoder->getMtlCompute();
 			[mtlComputeEnc pushDebugGroup: @"vkCmdCopyBuffer"];
-			state.bindPipeline(mtlComputeEnc, cmdEncoder->getCommandEncodingPool()->getCmdCopyBufferBytesMTLComputePipelineState());
+			state.bindPipeline(mtlComputeEnc, mtlCopyState);
 			state.bindBuffer(mtlComputeEnc, srcMTLBuff, srcMTLBuffOffset, 0);
 			state.bindBuffer(mtlComputeEnc, dstMTLBuff, dstMTLBuffOffset, 1);
 			state.bindStructBytes(mtlComputeEnc, &copyInfo, 2);
-			[mtlComputeEnc dispatchThreadgroups: MTLSizeMake(1, 1, 1) threadsPerThreadgroup: MTLSizeMake(1, 1, 1)];
+			// One thread per byte. Without non-uniform threadgroups, the kernel ignores the threads past the end.
+			MTLSize tgSize = MTLSizeMake(mtlCopyState.maxTotalThreadsPerThreadgroup, 1, 1);
+			if (cmdEncoder->getMetalFeatures().nonUniformThreadgroups) {
+				[mtlComputeEnc dispatchThreads: MTLSizeMake(copyInfo.size, 1, 1) threadsPerThreadgroup: tgSize];
+			} else {
+				[mtlComputeEnc dispatchThreadgroups: MTLSizeMake(mvkCeilingDivide(copyInfo.size, tgSize.width), 1, 1)
+							  threadsPerThreadgroup: tgSize];
+			}
 			[mtlComputeEnc popDebugGroup];
 		} else {
 			id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(kMVKCommandUseCopyBuffer);
@@ -1572,6 +1580,7 @@ void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
             state.bindTexture(mtlComputeEnc, imgMTLTex, 0);
             state.bindStructBytes(mtlComputeEnc, &_clearValue, 0);
             MTLSize gridSize = mvkMTLSizeFromVkExtent3D(_image->getExtent3D());
+            if (isTextureArray) { gridSize.depth = imgMTLTex.arrayLength; }	// One slice per grid layer.
             MTLSize tgSize = MTLSizeMake(mtlClearState.threadExecutionWidth, 1, 1);
             if (mtlFeats.nonUniformThreadgroups) {
                 [mtlComputeEnc dispatchThreads: gridSize threadsPerThreadgroup: tgSize];
