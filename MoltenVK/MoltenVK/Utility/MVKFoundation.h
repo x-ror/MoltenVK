@@ -31,6 +31,7 @@
 #include <string>
 #include <simd/simd.h>
 #include <type_traits>
+#include <os/lock.h>
 
 
 #pragma mark Math
@@ -438,8 +439,9 @@ static constexpr bool mvkFits(const Tval& val) {
 }
 
 /** Clamps the value between the lower and upper bounds, inclusive. */
+/** Returns a copy, so the result never refers to a temporary argument. Unlike std::clamp(), lower may exceed upper. */
 template<typename T>
-static constexpr const T& mvkClamp(const T& val, const T& lower, const T& upper) {
+static constexpr T mvkClamp(const T& val, const T& lower, const T& upper) {
     return std::min(std::max(val, lower), upper);
 }
 
@@ -494,6 +496,27 @@ static constexpr typename std::common_type<T, U>::type mvkLeastCommonMultiple(T 
 	typedef typename std::common_type<T, U>::type R;
 	return (a == 0 && b == 0) ? 0 : MVKAbs<R, T>::eval(a) / mvkGreatestCommonDivisor(a, b) * MVKAbs<R, U>::eval(b);
 }
+
+
+#pragma mark Locking
+
+/**
+ * A small, non-recursive lock that satisfies the BasicLockable requirements, so it can be
+ * used with std::lock_guard. It wraps os_unfair_lock, which is 4 bytes, where std::mutex is
+ * 64 bytes on Darwin. Use it for locks embedded in objects that are created in large numbers,
+ * and that never wait on a condition variable or lock recursively.
+ */
+class MVKUnfairLock {
+public:
+	MVKUnfairLock() = default;
+	MVKUnfairLock(const MVKUnfairLock&) = delete;
+	MVKUnfairLock& operator=(const MVKUnfairLock&) = delete;
+	void lock() { os_unfair_lock_lock(&_lock); }
+	void unlock() { os_unfair_lock_unlock(&_lock); }
+	bool try_lock() { return os_unfair_lock_trylock(&_lock); }
+private:
+	os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;
+};
 
 
 #pragma mark Hashing
@@ -618,8 +641,9 @@ static constexpr const T& mvkSelectPlatformValue(const T& macOSVal, const T& iOS
  */
 template<typename T>
 static void mvkClear(T* pDst, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkClear() writes bytes, so it requires a trivially copyable type.");
 	if ( !pDst ) { return; }					// Bad pointer
-	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); } }  // Fast clear of a single primitive
+	if constexpr(std::is_arithmetic_v<T>) { if (count == 1) { *pDst = static_cast<T>(0); return; } }  // Fast clear of a single primitive
 	memset(pDst, 0, sizeof(T) * count);			// Memory clear of complex content or array
 }
 
@@ -637,6 +661,7 @@ static void mvkClear(const T* pVal, size_t count = 1) { mvkClear((T*)pVal, count
  */
 template<typename T>
 static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
+	static_assert(std::is_void_v<T> || std::is_trivially_copyable_v<T>, "mvkCopy() copies bytes, so it requires a trivially copyable type.");
 	if ( !pDst || !pSrc ) { return; }				// Bad pointers
 	if (pDst == pSrc) { return; }					// Same object
 
@@ -658,6 +683,7 @@ static void mvkCopy(T* pDst, const T* pSrc, size_t count = 1) {
  */
 template<typename T>
 static constexpr bool mvkAreEqual(const T* pV1, const T* pV2, size_t count = 1) {
+	static_assert(std::is_trivially_copyable_v<T>, "mvkAreEqual() compares bytes, so it requires a trivially copyable type.");
 	if (count == 0) { return true; }					// Empty ranges are equal, even with null pointers (e.g. an empty MVKArrayRef)
 	if ( !pV1 || !pV2 ) { return false; }				// Bad pointers
 	if (pV1 == pV2) { return true; }					// Same object

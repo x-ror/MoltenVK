@@ -23,6 +23,8 @@
 #include "MVKObjectPool.h"
 #include "MVKDevice.h"
 #include "MVKSmallVector.h"
+#include <atomic>
+#include <memory>
 
 class MVKMTLBufferAllocationPool;
 
@@ -116,7 +118,8 @@ protected:
     NSUInteger _mtlBufferLength;
     MTLStorageMode _mtlStorageMode;
     struct MTLBufferTracker { id<MTLBuffer> mtlBuffer; uint64_t allocationCount; };
-    MVKSmallVector<MTLBufferTracker, 64> _mtlBuffers;
+    MVKSmallVector<MTLBufferTracker, 8> _mtlBuffers;
+	MVKUnfairLock _lock;
     bool _isThreadSafe;
 };
 
@@ -162,9 +165,17 @@ public:
     ~MVKMTLBufferAllocator() override;
 
 protected:
-	MVKSmallVector<MVKMTLBufferAllocationPool*, 32> _regionPools;
+	MVKMTLBufferAllocationPool* getRegionPool(NSUInteger p2Exp);
+
+	// One pool per power-of-two allocation size, created on first use. Most sizes are never
+	// requested, so creating the pools eagerly would cost about 1 KB each per command pool.
+	std::unique_ptr<std::atomic<MVKMTLBufferAllocationPool*>[]> _regionPools;
+	MVKUnfairLock _regionPoolsLock;
+	NSUInteger _regionPoolCount;
     NSUInteger _maxAllocationLength;
+	MTLStorageMode _mtlStorageMode;
 	bool _isThreadSafe;
+	bool _isDedicated;
 
 };
 

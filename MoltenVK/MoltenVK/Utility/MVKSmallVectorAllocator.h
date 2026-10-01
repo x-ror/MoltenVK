@@ -19,6 +19,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -84,85 +85,85 @@ public:
   //
   // faster element construction and destruction using type traits
   //
-  template<class S, class... Args> typename std::enable_if< !std::is_trivially_constructible<S, Args...>::value >::type
-    construct( S *_ptr, Args&&... _args )
+  template<class S, class... Args>
+  void construct( S *_ptr, Args&&... _args )
   {
-    new ( _ptr ) S( std::forward<Args>( _args )... );
-  }
-
-  template<class S, class... Args> typename std::enable_if< std::is_trivially_constructible<S, Args...>::value >::type
-    construct( S *_ptr, Args&&... _args )
-  {
-    *_ptr = S( std::forward<Args>( _args )... );
-  }
-
-  template<class S> typename std::enable_if< !std::is_trivially_destructible<S>::value >::type
-    destruct( S *_ptr )
-  {
-    _ptr->~S();
-  }
-
-  template<class S> typename std::enable_if< std::is_trivially_destructible<S>::value >::type
-    destruct( S *_ptr )
-  {
-  }
-
-  template<class S> typename std::enable_if< !std::is_trivially_destructible<S>::value >::type
-    destruct_all()
-  {
-    for( size_t i = 0; i < num_elements_used; ++i )
+    if constexpr( std::is_trivially_constructible_v<S, Args...> )
     {
-      ptr[i].~S();
+      *_ptr = S( std::forward<Args>( _args )... );
+    }
+    else
+    {
+      new ( _ptr ) S( std::forward<Args>( _args )... );
+    }
+  }
+
+  template<class S>
+  void destruct( S *_ptr )
+  {
+    if constexpr( !std::is_trivially_destructible_v<S> )
+    {
+      _ptr->~S();
+    }
+  }
+
+  template<class S>
+  void destruct_all()
+  {
+    if constexpr( !std::is_trivially_destructible_v<S> )
+    {
+      for( size_t i = 0; i < num_elements_used; ++i )
+      {
+        ptr[i].~S();
+      }
     }
 
     num_elements_used = 0;
   }
 
-  template<class S> typename std::enable_if< std::is_trivially_destructible<S>::value >::type
-    destruct_all()
+  //
+  // Moves count elements from src to uninitialized storage at dst, leaving src uninitialized.
+  // Trivially copyable elements are copied as a single block of bytes.
+  //
+  void relocate( T *dst, T *src, const size_t count )
   {
-    num_elements_used = 0;
-  }
-
-  template<class S> typename std::enable_if< !std::is_trivially_destructible<S>::value >::type
-    swap_stack( mvk_smallvector_allocator &a )
-  {
-    // Both allocators hold their elements in their inline stack storage. Move this
-    // allocator's elements to raw temporary storage, move a's elements into this
-    // allocator, then move the temporaries into a. Only constructed elements are
-    // touched; the stack storage beyond num_elements_used is uninitialized memory.
-    alignas( alignof( T ) ) unsigned char tmp_storage[ STACK_SIZE ];
-    T *tmp = reinterpret_cast< T* >( &tmp_storage[0] );
-    const size_t this_count = num_elements_used;
-    const size_t a_count = a.num_elements_used;
-
-    for( size_t i = 0; i < this_count; ++i )
+    if constexpr( std::is_trivially_copyable_v<T> )
     {
-      construct( &tmp[i], std::move( ptr[i] ) );
-      destruct( &ptr[i] );
+      if( count ) { memcpy( static_cast<void*>( dst ), static_cast<const void*>( src ), count * sizeof( T ) ); }
     }
-
-    for( size_t i = 0; i < a_count; ++i )
+    else
     {
-      construct( &ptr[i], std::move( a.ptr[i] ) );
-      destruct( &a.ptr[i] );
-    }
-
-    for( size_t i = 0; i < this_count; ++i )
-    {
-      construct( &a.ptr[i], std::move( tmp[i] ) );
-      destruct( &tmp[i] );
+      for( size_t i = 0; i < count; ++i )
+      {
+        construct( &dst[i], std::move( src[i] ) );
+        destruct( &src[i] );
+      }
     }
   }
 
-  template<class S> typename std::enable_if< std::is_trivially_destructible<S>::value >::type
-    swap_stack( mvk_smallvector_allocator &a )
+  template<class S>
+  void swap_stack( mvk_smallvector_allocator &a )
   {
-    for( int i = 0; i < STACK_SIZE; ++i )
+    if constexpr( std::is_trivially_copyable_v<S> )
     {
-      const auto v = elements_stack[i];
-      elements_stack[i] = a.elements_stack[i];
-      a.elements_stack[i] = v;
+      // Only the bytes that hold constructed elements in either allocator need to move.
+      const size_t used_bytes = ( num_elements_used > a.num_elements_used ? num_elements_used : a.num_elements_used ) * sizeof( T );
+      alignas( alignof( T ) ) unsigned char tmp_storage[ STACK_SIZE ];
+      memcpy( tmp_storage, elements_stack, used_bytes );
+      memcpy( elements_stack, a.elements_stack, used_bytes );
+      memcpy( a.elements_stack, tmp_storage, used_bytes );
+    }
+    else
+    {
+      // Both allocators hold their elements in their inline stack storage. Move this
+      // allocator's elements to raw temporary storage, move a's elements into this
+      // allocator, then move the temporaries into a. Only constructed elements are
+      // touched; the stack storage beyond num_elements_used is uninitialized memory.
+      alignas( alignof( T ) ) unsigned char tmp_storage[ STACK_SIZE ];
+      T *tmp = reinterpret_cast< T* >( &tmp_storage[0] );
+      relocate( tmp, ptr, num_elements_used );
+      relocate( ptr, a.ptr, a.num_elements_used );
+      relocate( a.ptr, tmp, num_elements_used );
     }
   }
 
@@ -171,7 +172,7 @@ public:
   {
   }
 
-  mvk_smallvector_allocator( mvk_smallvector_allocator &&a )
+  mvk_smallvector_allocator( mvk_smallvector_allocator &&a ) noexcept
   {
     // is a heap based -> steal ptr from a
     if( !a.get_data_on_stack() )
@@ -184,11 +185,7 @@ public:
     else
     {
       ptr = get_default_ptr();
-      for( size_t i = 0; i < a.num_elements_used; ++i )
-      {
-        construct( &ptr[i], std::move( a.ptr[i] ) );
-        destruct( &a.ptr[i] );
-      }
+      relocate( ptr, a.ptr, a.num_elements_used );
     }
 
 	num_elements_used = a.num_elements_used;
@@ -238,11 +235,7 @@ public:
       auto copy_num_elements_reserved = a.get_capacity();
 
       a.ptr = a.get_default_ptr();
-      for( size_t i = 0; i < num_elements_used; ++i )
-      {
-        construct( &a.ptr[i], std::move( ptr[i] ) );
-        destruct( &ptr[i] );
-      }
+      relocate( a.ptr, ptr, num_elements_used );
 
       ptr = copy_ptr;
       set_num_elements_reserved( copy_num_elements_reserved );
@@ -253,11 +246,7 @@ public:
       auto copy_num_elements_reserved = get_capacity();
 
       ptr = get_default_ptr();
-      for( size_t i = 0; i < a.num_elements_used; ++i )
-      {
-        construct( &ptr[i], std::move( a.ptr[i] ) );
-        destruct( &a.ptr[i] );
-      }
+      relocate( ptr, a.ptr, a.num_elements_used );
 
       a.ptr = copy_ptr;
       a.set_num_elements_reserved( copy_num_elements_reserved );
@@ -286,16 +275,11 @@ public:
     set_num_elements_reserved( num_elements_to_reserve );
   }
 
-  //template<class S> typename std::enable_if< !std::is_trivially_copyable<S>::value >::type
   void _re_allocate( const size_t num_elements_to_reserve )
   {
     auto *new_ptr = reinterpret_cast< T* >( mvk_smallvector_memory_allocator::alloc( num_elements_to_reserve * sizeof( T ) ) );
 
-    for( size_t i = 0; i < num_elements_used; ++i )
-    {
-      construct( &new_ptr[i], std::move( ptr[i] ) );
-      destruct( &ptr[i] );
-    }
+    relocate( new_ptr, ptr, num_elements_used );
 
     if( ptr != get_default_ptr() )
     {
@@ -305,24 +289,6 @@ public:
     ptr = new_ptr;
     set_num_elements_reserved( num_elements_to_reserve );
   }
-
-  //template<class S> typename std::enable_if< std::is_trivially_copyable<S>::value >::type
-  //  _re_allocate( const size_t num_elements_to_reserve )
-  //{
-  //  const bool data_is_on_stack = get_data_on_stack();
-  //
-  //  auto *new_ptr = reinterpret_cast< S* >( mvk_smallvector_memory_allocator::tm_memrealloc( data_is_on_stack ? nullptr : ptr, num_elements_to_reserve * sizeof( S ) ) );
-  //  if( data_is_on_stack )
-  //  {
-  //    for( int i = 0; i < N; ++i )
-  //    {
-  //      new_ptr[i] = ptr[i];
-  //    }
-  //  }
-  //
-  //  ptr = new_ptr;
-  //  set_num_elements_reserved( num_elements_to_reserve );
-  //}
 
   void re_allocate( const size_t num_elements_to_reserve )
   {
@@ -346,11 +312,7 @@ public:
       //const auto num_elements_reserved = get_capacity();
 
       auto *stack_ptr = get_default_ptr();
-      for( size_t i = 0; i < num_elements_used; ++i )
-      {
-        construct( &stack_ptr[i], std::move( ptr[i] ) );
-        destruct( &ptr[i] );
-      }
+      relocate( stack_ptr, ptr, num_elements_used );
 
       mvk_smallvector_memory_allocator::free( ptr );
 
@@ -360,11 +322,7 @@ public:
     {
       auto *new_ptr = reinterpret_cast< T* >( mvk_smallvector_memory_allocator::alloc( num_elements_used * sizeof( T ) ) );
 
-      for( size_t i = 0; i < num_elements_used; ++i )
-      {
-        construct( &new_ptr[i], std::move( ptr[i] ) );
-        destruct( &ptr[i] );
-      }
+      relocate( new_ptr, ptr, num_elements_used );
 
       mvk_smallvector_memory_allocator::free( ptr );
 

@@ -36,6 +36,18 @@ Released TBD
 - Fix `MVKLargeStaticBitSet::operator==` always returning `true`, and `MVKSmallVector::swap()` of non-trivial element types.
 - Fix a crash, or push descriptors not being written, when the `VkDescriptorUpdateTemplate` of `vkCmdPushDescriptorSetWithTemplate()` is destroyed before the command buffer is submitted.
 - Pass the draw index to shaders that read `gl_DrawID` inline on direct draws, and return temporary `MTLBuffer` allocations to their pools with one completion handler per Metal command buffer.
+- Fix a self-deadlock in `MVKQueryPool` when a deferred `vkCmdCopyQueryPoolResults()` with `VK_QUERY_RESULT_WAIT_BIT` is encoded by a compute copy.
+- Fix unlocked insertion into the per-command-pool Metal resource maps, the per-image texture view map, and the shared pixel format tables when looking up an entry that does not exist.
+- Fix thread-unsafe one-time initialization of the global configuration, the platform pixel formats, the OS version, and the layer manager.
+- Fix `MVKSmallVector` copy assignment not compiling, reverse iteration over pointer vectors being empty, and mark its move operations `noexcept`.
+- Fix `vkCmdBeginRenderPass()` with two clear values being recorded into the wrong command pool.
+- Fix an uninitialized descriptor pool free-list size, a missing `break` when reading `VkExportMetalObjectCreateInfoEXT` during memory allocation, stale `pNext` pointers kept in recorded dynamic rendering attachments, a leaked Metal command buffer label per queue, and a missing `default` in `mvkMTLIndexTypeSizeInBytes()`.
+- Reduce pipeline creation and `VkPipelineCache` loading costs: copy the shader conversion configuration only on a cache miss, move cache entries into place instead of copying them, compare configurations index-aligned before scanning, index Metal function constants once per library, and skip macro specialization for shaders that use none.
+- Reduce memory per `VkCommandPool` by creating temporary `MTLBuffer` pools on first use and removing unused locks from command pools, and per buffer, image, view and device memory by using a 4-byte lock in place of `std::mutex`.
+- Create the barrier `MTLFence` objects of a device only when they can be used, read environment variables without building a dictionary per lookup, and replace variable-length stack arrays in transfer commands and device queries with small vectors.
+- Copy push descriptor writes into one block of storage reused across recordings, and fix the data of an inline uniform block pushed with `vkCmdPushDescriptorSet()` not being copied at record time.
+- Make `MVKSmallVector` iterators plain pointers, move and copy trivially copyable elements as blocks of bytes, and fix erasing an empty range from the middle of an `MVKSmallVector` moving the following elements onto themselves.
+- Add move operations to `MVKBitArray`, and require trivially copyable types in `mvkClear()`, `mvkCopy()` and `mvkAreEqual()`.
 
 
 

@@ -351,6 +351,7 @@ MVKQueue::~MVKQueue() {
 	[_mtlCmdBuffLabelQueueWaitIdle release];
 	[_mtlCmdBuffLabelAcquireNextImage release];
 	[_mtlCmdBuffLabelInvalidateMappedMemoryRanges release];
+	[_mtlCmdBuffLabelCopyImageToMemory release];
 }
 
 // Destroys the execution dispatch queue.

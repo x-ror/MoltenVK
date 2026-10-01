@@ -188,27 +188,40 @@ MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::markAllInterfaceVarsAn
 // this function to find a cached shader for a particular shader stage, only consider the resources
 // that are used in that shader stage. By contrast, discreteDescriptorSet apply across all stages,
 // and shaderInputs and shaderOutputs are populated before each stage, so neither needs to be filtered by stage here.
+//
+// Configurations built from the same pipeline layout list their elements in the same order,
+// so each element is first compared against the element at the same index in the other
+// configuration, and the full scan is only needed when that does not match.
+template<typename T>
+static bool matchesAtIndexOrContains(const vector<T>& otherElems, const T& elem, size_t idx) {
+	return (idx < otherElems.size() && elem.matches(otherElems[idx])) || containsMatching(otherElems, elem);
+}
+
 MVK_PUBLIC_SYMBOL bool SPIRVToMSLConversionConfiguration::matches(const SPIRVToMSLConversionConfiguration& other) const {
 
     if ( !options.matches(other.options) ) { return false; }
 
-	for (const auto& si : shaderInputs) {
-		if (si.outIsUsedByShader && !containsMatching(other.shaderInputs, si)) { return false; }
+	for (size_t idx = 0; idx < shaderInputs.size(); idx++) {
+		const auto& si = shaderInputs[idx];
+		if (si.outIsUsedByShader && !matchesAtIndexOrContains(other.shaderInputs, si, idx)) { return false; }
 	}
 
-	for (const auto& so : shaderOutputs) {
-		if (so.outIsUsedByShader && !containsMatching(other.shaderOutputs, so)) { return false; }
+	for (size_t idx = 0; idx < shaderOutputs.size(); idx++) {
+		const auto& so = shaderOutputs[idx];
+		if (so.outIsUsedByShader && !matchesAtIndexOrContains(other.shaderOutputs, so, idx)) { return false; }
 	}
 
-    for (const auto& rb : resourceBindings) {
+	for (size_t idx = 0; idx < resourceBindings.size(); idx++) {
+		const auto& rb = resourceBindings[idx];
         if (rb.resourceBinding.stage == options.entryPointStage &&
 			rb.outIsUsedByShader &&
-			!containsMatching(other.resourceBindings, rb)) { return false; }
+			!matchesAtIndexOrContains(other.resourceBindings, rb, idx)) { return false; }
     }
 
-	for (const auto& db : dynamicBufferDescriptors) {
+	for (size_t idx = 0; idx < dynamicBufferDescriptors.size(); idx++) {
+		const auto& db = dynamicBufferDescriptors[idx];
 		if (db.stage == options.entryPointStage &&
-			!containsMatching(other.dynamicBufferDescriptors, db)) { return false; }
+			!matchesAtIndexOrContains(other.dynamicBufferDescriptors, db, idx)) { return false; }
 	}
 
 	for (uint32_t dsIdx : discreteDescriptorSets) {
@@ -219,30 +232,26 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConversionConfiguration::matches(const SPIRVToM
 }
 
 
-MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(const SPIRVToMSLConversionConfiguration& srcContext) {
-
-	for (auto& si : shaderInputs) {
-		si.outIsUsedByShader = false;
-		for (auto& srcSI : srcContext.shaderInputs) {
-			if (si.matches(srcSI)) { si.outIsUsedByShader = srcSI.outIsUsedByShader; }
-		}
-	}
-
-	for (auto& so : shaderOutputs) {
-		so.outIsUsedByShader = false;
-		for (auto& srcSO : srcContext.shaderOutputs) {
-			if (so.matches(srcSO)) { so.outIsUsedByShader = srcSO.outIsUsedByShader; }
-		}
-	}
-
-    for (auto& rb : resourceBindings) {
-        rb.outIsUsedByShader = false;
-        for (auto& srcRB : srcContext.resourceBindings) {
-			if (rb.matches(srcRB)) {
-				rb.outIsUsedByShader = srcRB.outIsUsedByShader;
+// Copies the usage flag of each element from the last matching element of the source.
+// Scanning the source from the end and stopping at the first match gives the same result
+// as scanning all of it, without visiting the elements before the match.
+template<typename T>
+static void alignUsageWith(vector<T>& elems, const vector<T>& srcElems) {
+	for (T& elem : elems) {
+		elem.outIsUsedByShader = false;
+		for (auto srcIter = srcElems.rbegin(); srcIter != srcElems.rend(); ++srcIter) {
+			if (elem.matches(*srcIter)) {
+				elem.outIsUsedByShader = srcIter->outIsUsedByShader;
+				break;
 			}
-        }
-    }
+		}
+	}
+}
+
+MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(const SPIRVToMSLConversionConfiguration& srcContext) {
+	alignUsageWith(shaderInputs, srcContext.shaderInputs);
+	alignUsageWith(shaderOutputs, srcContext.shaderOutputs);
+	alignUsageWith(resourceBindings, srcContext.resourceBindings);
 }
 
 
@@ -250,11 +259,7 @@ MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(const SPIRVT
 #pragma mark SPIRVToMSLConverter
 
 MVK_PUBLIC_SYMBOL void SPIRVToMSLConverter::setSPIRV(const uint32_t* spirvCode, size_t length) {
-	_spirv.clear();			// Clear for reuse
-	_spirv.reserve(length);
-	for (size_t i = 0; i < length; i++) {
-		_spirv.push_back(spirvCode[i]);
-	}
+	_spirv.assign(spirvCode, spirvCode + length);
 }
 
 MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConversionConfiguration& shaderConfig,

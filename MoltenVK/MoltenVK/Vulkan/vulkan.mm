@@ -162,7 +162,7 @@ static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t star
 	if (value1 <= arg1Threshold1 && value2 <= arg2Threshold1) {									\
 		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
 	} else if (value1 <= arg1Threshold2 && value2 <= arg2Threshold1) {							\
-		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
+		MVKAddCmd(baseCmdType ##arg1Threshold2 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
 	} else if (value1 > arg1Threshold2 && value2 <= arg2Threshold1) {							\
 		MVKAddCmd(baseCmdType ##Multi ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);				\
 	} else if (value1 <= arg1Threshold1 && value2 <= arg2Threshold2) {							\
