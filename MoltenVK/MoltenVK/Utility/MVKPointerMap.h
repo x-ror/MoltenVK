@@ -18,7 +18,6 @@
 
 #pragma once
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -119,7 +118,7 @@ protected:
 		std::vector<Slot> oldSlots = std::move(_slots);
 		size_t newCapacity = oldSlots.empty() ? kInitialCapacity : oldSlots.size() * 2;
 		_slots.assign(newCapacity, Slot());
-		_shift = 64 - static_cast<uint32_t>(std::countr_zero(newCapacity));
+		_shift = 64 - static_cast<uint32_t>(__builtin_ctzll(newCapacity));
 		uint32_t oldGeneration = _generation;
 		_generation = 1;
 		_count = 0;

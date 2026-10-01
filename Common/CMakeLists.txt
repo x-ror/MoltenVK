@@ -34,8 +34,8 @@ target_link_libraries(MoltenVK_Common PUBLIC
 # Compiler options
 ################################################################################
 
-# Use C++20
-target_compile_features(MoltenVK_Common PUBLIC cxx_std_20)
+# Use C++17
+target_compile_features(MoltenVK_Common PUBLIC cxx_std_17)
 
 # Disable annoying warnings
 set(MOLTEN_VK_WARNING_FLAGS

@@ -22,12 +22,10 @@
 
 #include "MVKEnvironment.h"
 #include <algorithm>
-#include <bit>
 #include <cassert>
 #include <climits>
 #include <cmath>
 #include <limits>
-#include <span>
 #include <string>
 #include <simd/simd.h>
 #include <type_traits>
@@ -299,21 +297,35 @@ static constexpr uint64_t kMVKUndefinedLargeUInt64        =  kMVKUndefinedLargeP
 template <typename T>
 static constexpr uint32_t mvkPopcount(T t) {
 	static_assert(std::is_integral_v<T>, "mvkPopcount requires an integer type");
-	return static_cast<uint32_t>(std::popcount(static_cast<std::make_unsigned_t<T>>(t)));
+	using U = std::make_unsigned_t<T>;
+	U u = static_cast<U>(t);
+	if constexpr (sizeof(U) <= sizeof(unsigned)) { return __builtin_popcount(u); }
+	else if constexpr (sizeof(U) <= sizeof(unsigned long)) { return __builtin_popcountl(u); }
+	else { return __builtin_popcountll(u); }
 }
 
 /** Returns the number of leading zero bits, counted within the width of T. Returns the bit width for zero. */
 template <typename T>
 static constexpr uint32_t mvkCLZ(T t) {
 	static_assert(std::is_integral_v<T>, "mvkCLZ requires an integer type");
-	return static_cast<uint32_t>(std::countl_zero(static_cast<std::make_unsigned_t<T>>(t)));
+	using U = std::make_unsigned_t<T>;
+	U u = static_cast<U>(t);
+	if (u == 0) { return sizeof(U) * CHAR_BIT; }	// The builtins are undefined for zero.
+	if constexpr (sizeof(U) <= sizeof(unsigned)) { return __builtin_clz(u) - (sizeof(unsigned) - sizeof(U)) * CHAR_BIT; }
+	else if constexpr (sizeof(U) <= sizeof(unsigned long)) { return __builtin_clzl(u); }
+	else { return __builtin_clzll(u); }
 }
 
 /** Returns the number of trailing zero bits, counted within the width of T. Returns the bit width for zero. */
 template <typename T>
 static constexpr uint32_t mvkCTZ(T t) {
 	static_assert(std::is_integral_v<T>, "mvkCTZ requires an integer type");
-	return static_cast<uint32_t>(std::countr_zero(static_cast<std::make_unsigned_t<T>>(t)));
+	using U = std::make_unsigned_t<T>;
+	U u = static_cast<U>(t);
+	if (u == 0) { return sizeof(U) * CHAR_BIT; }	// The builtins are undefined for zero.
+	if constexpr (sizeof(U) <= sizeof(unsigned)) { return __builtin_ctz(u); }
+	else if constexpr (sizeof(U) <= sizeof(unsigned long)) { return __builtin_ctzl(u); }
+	else { return __builtin_ctzll(u); }
 }
 
 #pragma mark - Vulkan structure support functions
@@ -556,14 +568,10 @@ public:
 	constexpr Type& back() const { assert(_size); return _data[_size - 1]; }
 	constexpr MVKArrayRef() : MVKArrayRef(nullptr, 0) {}
 	constexpr MVKArrayRef(Type* d, size_t s) : _data(d), _size(s) {}
-	template <typename Other> requires std::is_convertible_v<Other(*)[], Type(*)[]>
+	template <typename Other, std::enable_if_t<std::is_convertible_v<Other(*)[], Type(*)[]>, bool> = true>
 	constexpr MVKArrayRef(MVKArrayRef<Other> other) : _data(other.data()), _size(other.size()) {}
 	template <size_t N>
 	constexpr MVKArrayRef(Type(&arr)[N]): _data(arr), _size(N) {}
-	template <typename Other, size_t Extent> requires std::is_convertible_v<Other(*)[], Type(*)[]>
-	constexpr MVKArrayRef(std::span<Other, Extent> s) : _data(s.data()), _size(s.size()) {}
-	constexpr operator std::span<Type>() const { return std::span<Type>(_data, _size); }
-	constexpr std::span<Type> span() const { return std::span<Type>(_data, _size); }
 
 protected:
 	Type* _data;
