@@ -2571,10 +2571,12 @@ VkResult MVKPipelineCache::writeDataImpl(size_t* pDataSize, void* pData) {
 
 		if (pData) {
 			if (*pDataSize >= _dataSize) {
-				mvk::membuf mb((char*)pData, _dataSize);
+				// A library restored from cache data that fails to compile on first use is not written,
+				// so the data may be smaller than _dataSize. Return the number of bytes actually written.
+				mvk::membuf mb((char*)pData, *pDataSize);
 				ostream outStream(&mb);
 				writeData(outStream);
-				*pDataSize = _dataSize;
+				*pDataSize = mb.getWrittenSize();
 				return VK_SUCCESS;
 			} else {
 				*pDataSize = 0;
