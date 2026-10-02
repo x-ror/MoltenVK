@@ -510,20 +510,29 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	inFlight->config = std::move(*markedConfig);
 	_inFlight.push_back(inFlight);
 
+	// Retires the in-flight entry and wakes any waiters, whether or not the conversion succeeded.
+	auto retireInFlight = [&]() {
+		for (auto iter = _inFlight.begin(); iter != _inFlight.end(); iter++) {
+			if (*iter == inFlight) { _inFlight.erase(iter); break; }
+		}
+		inFlight->isDone = true;
+		inFlight->done.notify_all();
+	};
+
 	pCacheLock->unlock();
 	MVKShaderLibrary* shLib = nullptr;
-	SPIRVToMSLConversionResult conversionResult;
-	if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
-		shLib = new MVKShaderLibrary(_owner, conversionResult);
+	try {
+		SPIRVToMSLConversionResult conversionResult;
+		if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
+			shLib = new MVKShaderLibrary(_owner, conversionResult);
+		}
+	} catch (...) {
+		pCacheLock->lock();
+		retireInFlight();
+		throw;
 	}
 	pCacheLock->lock();
-
-	// Retire the in-flight entry and wake any waiters, whether or not the conversion succeeded.
-	for (auto iter = _inFlight.begin(); iter != _inFlight.end(); iter++) {
-		if (*iter == inFlight) { _inFlight.erase(iter); break; }
-	}
-	inFlight->isDone = true;
-	inFlight->done.notify_all();
+	retireInFlight();
 
 	if ( !shLib ) { return nullptr; }
 	return addOrReuseShaderLibrary(pShaderConfig, shLib, pWasAdded, pShaderFeedback, startTime);
