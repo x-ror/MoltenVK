@@ -323,22 +323,99 @@ MVKShaderLibrary::~MVKShaderLibrary() {
 MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  MVKShaderModule* shaderModule, MVKPipeline* pipeline,
 														  bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
-														  uint64_t startTime) {
-	bool wasAdded = false;
-	MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
-	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
-		SPIRVToMSLConversionResult conversionResult;
-		if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
-			shLib = addShaderLibrary(pShaderConfig, conversionResult);
-			if (pShaderFeedback) {
-				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+														  uint64_t startTime,
+														  unique_lock<mutex>* pCacheLock) {
+	if (pWasAdded) { *pWasAdded = false; }
+
+	// Exclusive access: look up, and convert and compile inline if needed.
+	if ( !pCacheLock ) {
+		MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+		if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
+			SPIRVToMSLConversionResult conversionResult;
+			if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
+				shLib = addShaderLibrary(pShaderConfig, conversionResult);
+				if (pShaderFeedback) {
+					pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+				}
+				if (pWasAdded) { *pWasAdded = true; }
 			}
-			wasAdded = true;
 		}
+		return shLib;
 	}
 
-	if (pWasAdded) { *pWasAdded = wasAdded; }
+	// Shared access: the caller holds *pCacheLock. Look up under the lock. On a miss, if another
+	// thread is already converting an equivalent request, wait for it and look up again. Otherwise
+	// register this request as in flight and release the lock while converting and compiling.
+	SPIRVToMSLConversionConfiguration markedConfig = *pShaderConfig;
+	markedConfig.markAllInterfaceVarsAndResourcesUsed();
+	std::shared_ptr<InFlightConversion> inFlight;
+	while (true) {
+		MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+		if (shLib) { return shLib; }
+		if (pipeline->shouldFailOnPipelineCompileRequired()) { return nullptr; }
 
+		std::shared_ptr<InFlightConversion> other = findInFlight(markedConfig);
+		if ( !other ) { break; }
+		other->done.wait(*pCacheLock, [&other]{ return other->isDone; });
+	}
+
+	inFlight = std::make_shared<InFlightConversion>();
+	inFlight->config = std::move(markedConfig);
+	_inFlight.push_back(inFlight);
+
+	// Retires the in-flight entry and wakes any waiters, whether or not the conversion succeeded.
+	auto retireInFlight = [&]() {
+		for (auto iter = _inFlight.begin(); iter != _inFlight.end(); iter++) {
+			if (*iter == inFlight) { _inFlight.erase(iter); break; }
+		}
+		inFlight->isDone = true;
+		inFlight->done.notify_all();
+	};
+
+	pCacheLock->unlock();
+	MVKShaderLibrary* shLib = nullptr;
+	try {
+		SPIRVToMSLConversionResult conversionResult;
+		if (shaderModule->convert(pShaderConfig, conversionResult) && !conversionResult.msl.empty()) {
+			shLib = new MVKShaderLibrary(_owner, conversionResult);
+		}
+	} catch (...) {
+		pCacheLock->lock();
+		retireInFlight();
+		throw;
+	}
+	pCacheLock->lock();
+	retireInFlight();
+
+	if ( !shLib ) { return nullptr; }
+	return addOrReuseShaderLibrary(pShaderConfig, shLib, pWasAdded, pShaderFeedback, startTime);
+}
+
+// Returns an in-flight conversion whose request is equivalent to the marked config, or null if there is none.
+// Both configs have all elements marked as used, so matching in both directions compares every element.
+std::shared_ptr<MVKShaderLibraryCache::InFlightConversion> MVKShaderLibraryCache::findInFlight(const SPIRVToMSLConversionConfiguration& markedConfig) {
+	for (auto& inFlight : _inFlight) {
+		if (inFlight->config.matches(markedConfig) && markedConfig.matches(inFlight->config)) { return inFlight; }
+	}
+	return nullptr;
+}
+
+// Adds the newly compiled library to the cache, unless an equivalent library was added by another
+// thread meanwhile, in which case the new library is destroyed and the existing one returned.
+MVKShaderLibrary* MVKShaderLibraryCache::addOrReuseShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
+																 MVKShaderLibrary* shLib, bool* pWasAdded,
+																 VkPipelineCreationFeedback* pShaderFeedback,
+																 uint64_t startTime) {
+	MVKShaderLibrary* existing = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+	if (existing) {
+		shLib->destroy();
+		return existing;
+	}
+	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+	if (pShaderFeedback) {
+		pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+	}
+	if (pWasAdded) { *pWasAdded = true; }
 	return shLib;
 }
 
@@ -407,8 +484,8 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 		if (pipelineCache) {
 			mvkLib = pipelineCache->getShaderLibrary(pShaderConfig, this, pipeline, pShaderFeedback, startTime);
 		} else {
-			lock_guard<mutex> lock(_accessLock);
-			mvkLib = _shaderLibraryCache.getShaderLibrary(pShaderConfig, this, pipeline, nullptr, pShaderFeedback, startTime);
+			unique_lock<mutex> lock(_accessLock);
+			mvkLib = _shaderLibraryCache.getShaderLibrary(pShaderConfig, this, pipeline, nullptr, pShaderFeedback, startTime, &lock);
 		}
 	} else {
 		mvkLib->setEntryPointName(pShaderConfig->options.entryPointName);

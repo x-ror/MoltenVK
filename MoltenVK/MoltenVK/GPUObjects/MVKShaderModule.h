@@ -24,7 +24,9 @@
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <MoltenVKShaderConverter/SPIRVReflection.h>
+#include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -186,11 +188,19 @@ public:
 	 *
 	 * If pWasAdded is not nil, this function will set it to true if a new shader library was created,
 	 * and to false if an existing shader library was found and returned.
+	 *
+	 * pCacheLock is the lock that guards this cache, held by the caller. When it is not null,
+	 * the lock is released while the SPIR-V is converted and the Metal library compiled, so that
+	 * other threads can use the cache meanwhile, and re-acquired before returning. A thread that
+	 * requests a library that another thread is already compiling waits for that library instead
+	 * of compiling it again. When pCacheLock is null, the caller guarantees exclusive access
+	 * (an externally synchronized pipeline cache) and the work is done inline.
 	 */
 	MVKShaderLibrary* getShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   MVKShaderModule* shaderModule, MVKPipeline* pipeline,
 									   bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
-									   uint64_t startTime = 0);
+									   uint64_t startTime = 0,
+									   std::unique_lock<std::mutex>* pCacheLock = nullptr);
 
 	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner) : MVKBaseDeviceObject(owner->getDevice()), _owner(owner) {};
 
@@ -211,8 +221,20 @@ protected:
 									   const MVKCompressor<std::string> compressedMSL);
 	void merge(MVKShaderLibraryCache* other);
 
+	/** A conversion and compilation that is in progress on some thread, with the cache lock released. */
+	struct InFlightConversion {
+		mvk::SPIRVToMSLConversionConfiguration config;	// Requested config with all elements marked used, for equivalence matching
+		std::condition_variable done;
+		bool isDone = false;
+	};
+	std::shared_ptr<InFlightConversion> findInFlight(const mvk::SPIRVToMSLConversionConfiguration& markedConfig);
+	MVKShaderLibrary* addOrReuseShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+											  MVKShaderLibrary* shLib, bool* pWasAdded,
+											  VkPipelineCreationFeedback* pShaderFeedback, uint64_t startTime);
+
 	MVKVulkanAPIDeviceObject* _owner;
 	MVKSmallVector<std::pair<mvk::SPIRVToMSLConversionConfiguration, MVKShaderLibrary*>> _shaderLibraries;
+	std::vector<std::shared_ptr<InFlightConversion>> _inFlight;	// Guarded by the caller's cache lock
 };
 
 
