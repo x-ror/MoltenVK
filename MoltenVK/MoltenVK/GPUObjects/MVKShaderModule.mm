@@ -477,6 +477,41 @@ void MVKShaderModule::setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z) {
 }
 
 
+#pragma mark Reflection
+
+// Entries are never removed from the map, and std::map does not move its nodes,
+// so the returned reference stays valid after the lock is released.
+const MVKShaderModule::InterfaceReflection& MVKShaderModule::getInterfaceReflection(spv::ExecutionModel model,
+																					 spv::StorageClass storage,
+																					 const char* entryName) {
+	InterfaceReflectionKey key { model, storage, entryName ? entryName : "" };
+	lock_guard<mutex> lock(_reflectionLock);
+	auto iter = _interfaceReflections.find(key);
+	if (iter == _interfaceReflections.end()) {
+		iter = _interfaceReflections.emplace(key, InterfaceReflection()).first;
+		InterfaceReflection& refl = iter->second;
+		refl.success = mvk::getShaderInterfaceVariables(getSPIRV(), storage, model, key.entryName, refl.vars, refl.errorLog);
+	}
+	return iter->second;
+}
+
+bool MVKShaderModule::getTessReflectionData(const char* tescEntryName,
+											MVKShaderModule* teseModule, const char* teseEntryName,
+											SPIRVTessReflectionData& reflectData, string& errorLog) {
+	TessReflectionKey key { tescEntryName ? tescEntryName : "", teseModule->getKey(), teseEntryName ? teseEntryName : "" };
+	lock_guard<mutex> lock(_reflectionLock);
+	auto iter = _tessReflections.find(key);
+	if (iter == _tessReflections.end()) {
+		iter = _tessReflections.emplace(key, TessReflection()).first;
+		TessReflection& refl = iter->second;
+		refl.success = mvk::getTessReflectionData(getSPIRV(), key.tescEntryName, teseModule->getSPIRV(), key.teseEntryName, refl.data, refl.errorLog);
+	}
+	reflectData = iter->second.data;
+	errorLog = iter->second.errorLog;
+	return iter->second.success;
+}
+
+
 #pragma mark Construction
 
 MVKShaderModule::MVKShaderModule(MVKDevice* device,

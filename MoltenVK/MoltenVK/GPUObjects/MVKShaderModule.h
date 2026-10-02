@@ -23,7 +23,11 @@
 #include "MVKCodec.h"
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
+#include <MoltenVKShaderConverter/SPIRVReflection.h>
+#include <map>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #import <Metal/Metal.h>
 
@@ -261,6 +265,31 @@ public:
 	/** Returns the original SPIR-V code that was specified when this object was created. */
 	const std::vector<uint32_t>& getSPIRV() { return _spvConverter.getSPIRV(); }
 
+	/**
+	 * Populates outputs with the interface output variables of the entry point, returning false
+	 * and populating errorLog if reflection fails. The reflection result depends only on this
+	 * module, the execution model and the entry point, so it is computed once and cached.
+	 */
+	template <typename Vo>
+	bool getShaderOutputs(spv::ExecutionModel model, const char* entryName, Vo& outputs, std::string& errorLog) {
+		return copyInterfaceReflection(model, spv::StorageClassOutput, entryName, outputs, errorLog);
+	}
+
+	/** Populates inputs with the interface input variables of the entry point. See getShaderOutputs(). */
+	template <typename Vi>
+	bool getShaderInputs(spv::ExecutionModel model, const char* entryName, Vi& inputs, std::string& errorLog) {
+		return copyInterfaceReflection(model, spv::StorageClassInput, entryName, inputs, errorLog);
+	}
+
+	/**
+	 * Populates reflectData with the tessellation reflection data of this tessellation control
+	 * module and the tessellation evaluation module, returning false and populating errorLog if
+	 * reflection fails. The result is cached in this module.
+	 */
+	bool getTessReflectionData(const char* tescEntryName,
+							   MVKShaderModule* teseModule, const char* teseEntryName,
+							   mvk::SPIRVTessReflectionData& reflectData, std::string& errorLog);
+
     /** Sets the number of threads in a single compute kernel workgroup, per dimension. */
     void setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z);
     
@@ -276,11 +305,55 @@ protected:
 
 	void propagateDebugName() override {}
 
+	struct InterfaceReflectionKey {
+		spv::ExecutionModel model;
+		spv::StorageClass storage;
+		std::string entryName;
+		bool operator<(const InterfaceReflectionKey& o) const {
+			if (model != o.model) { return model < o.model; }
+			if (storage != o.storage) { return storage < o.storage; }
+			return entryName < o.entryName;
+		}
+	};
+	struct InterfaceReflection {
+		std::vector<mvk::SPIRVShaderInterfaceVariable> vars;
+		std::string errorLog;
+		bool success = false;
+	};
+	struct TessReflectionKey {
+		std::string tescEntryName;
+		MVKShaderModuleKey teseKey;
+		std::string teseEntryName;
+		bool operator<(const TessReflectionKey& o) const {
+			if (tescEntryName != o.tescEntryName) { return tescEntryName < o.tescEntryName; }
+			if (teseKey.codeHash != o.teseKey.codeHash) { return teseKey.codeHash < o.teseKey.codeHash; }
+			if (teseKey.codeSize != o.teseKey.codeSize) { return teseKey.codeSize < o.teseKey.codeSize; }
+			return teseEntryName < o.teseEntryName;
+		}
+	};
+	struct TessReflection {
+		mvk::SPIRVTessReflectionData data;
+		std::string errorLog;
+		bool success = false;
+	};
+
+	const InterfaceReflection& getInterfaceReflection(spv::ExecutionModel model, spv::StorageClass storage, const char* entryName);
+	template <typename V>
+	bool copyInterfaceReflection(spv::ExecutionModel model, spv::StorageClass storage, const char* entryName, V& vars, std::string& errorLog) {
+		const InterfaceReflection& refl = getInterfaceReflection(model, storage, entryName);
+		vars.assign(refl.vars.begin(), refl.vars.end());
+		errorLog = refl.errorLog;
+		return refl.success;
+	}
+
 	MVKShaderLibraryCache _shaderLibraryCache;
 	mvk::SPIRVToMSLConverter _spvConverter;
 	MVKShaderLibrary* _directMSLLibrary;
 	MVKShaderModuleKey _key;
     std::mutex _accessLock;
+	std::map<InterfaceReflectionKey, InterfaceReflection> _interfaceReflections;	// Guarded by _reflectionLock
+	std::map<TessReflectionKey, TessReflection> _tessReflections;					// Guarded by _reflectionLock
+	std::mutex _reflectionLock;
 };
 
 

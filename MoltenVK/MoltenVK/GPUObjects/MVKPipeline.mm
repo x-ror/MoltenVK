@@ -807,7 +807,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	if (pTessCtlSS && pTessEvalSS) {
 		_isTessellationPipeline = true;
 
-		if (!getTessReflectionData(_tessCtlModule->getSPIRV(), pTessCtlSS->pName, _tessEvalModule->getSPIRV(), pTessEvalSS->pName, reflectData, reflectErrorLog) ) {
+		if (!_tessCtlModule->getTessReflectionData(pTessCtlSS->pName, _tessEvalModule, pTessEvalSS->pName, reflectData, reflectErrorLog) ) {
 			setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to reflect tessellation shaders: %s", reflectErrorLog.c_str()));
 			return;
 		}
@@ -1181,7 +1181,7 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 
 	SPIRVShaderOutputs vtxOutputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_vertexModule->getSPIRV(), spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
+	if (!_vertexModule->getShaderOutputs(spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get vertex outputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1220,7 +1220,7 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessVertexStageDescript
 
 	SPIRVShaderInputs tcInputs;
 	std::string errorLog;
-	if (!getShaderInputs(_tessCtlModule->getSPIRV(), spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcInputs, errorLog) ) {
+	if (!_tessCtlModule->getShaderInputs(spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcInputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation control inputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1308,11 +1308,11 @@ MTLComputePipelineDescriptor* MVKGraphicsPipeline::newMTLTessControlStageDescrip
 	SPIRVShaderOutputs vtxOutputs;
 	SPIRVShaderInputs teInputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_vertexModule->getSPIRV(), spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
+	if (!_vertexModule->getShaderOutputs(spv::ExecutionModelVertex, pVertexSS->pName, vtxOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get vertex outputs: %s", errorLog.c_str()));
 		return nil;
 	}
-	if (!getShaderInputs(_tessEvalModule->getSPIRV(), spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teInputs, errorLog) ) {
+	if (!_tessEvalModule->getShaderInputs(spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teInputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation evaluation inputs: %s", errorLog.c_str()));
 		return nil;
 	}
@@ -1352,11 +1352,11 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLTessRasterStageDescripto
 	SPIRVShaderOutputs tcOutputs, teOutputs;
 	SPIRVShaderInputs teInputs;
 	std::string errorLog;
-	if (!getShaderOutputs(_tessCtlModule->getSPIRV(), spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcOutputs, errorLog) ) {
+	if (!_tessCtlModule->getShaderOutputs(spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation control outputs: %s", errorLog.c_str()));
 		return nil;
 	}
-	if (!getShaderOutputs(_tessEvalModule->getSPIRV(), spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teOutputs, errorLog) ) {
+	if (!_tessEvalModule->getShaderOutputs(spv::ExecutionModelTessellationEvaluation, pTessEvalSS->pName, teOutputs, errorLog) ) {
 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation evaluation outputs: %s", errorLog.c_str()));
 		return nil;
 	}
