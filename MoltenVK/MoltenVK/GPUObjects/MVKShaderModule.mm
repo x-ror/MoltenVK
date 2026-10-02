@@ -209,8 +209,10 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 
 		NSString* mtlFuncName = @(funcName.c_str());
 		uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : 0;
-		MVKFunctionSpecializer fs(_owner);
-		mtlFunc = fs.newMTLFunction(_mtlLibrary, mtlFuncName, mtlFCVals);		// retained
+		// Heap-allocated, because the completion handler may run after a timeout.
+		MVKFunctionSpecializer* fs = new MVKFunctionSpecializer(_owner);
+		mtlFunc = fs->newMTLFunction(_mtlLibrary, mtlFuncName, mtlFCVals);		// retained
+		fs->destroy();
 		if (pShaderFeedback) {
 			pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 		}
