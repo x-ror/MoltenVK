@@ -397,6 +397,7 @@ static const MVKMTLBufferAllocation* convertUint8IndexBuffer(MVKCommandEncoder* 
     // Copy 8-bit indices into 16-bit index buffer compatible with Metal.
     const auto numIndices = ibb.size;
     auto* uint16Buf = cmdEncoder->getTempMTLBuffer(numIndices * 2);
+    if ( !uint16Buf ) { return nullptr; }
 
     cmdEncoder->encodeStoreActions(true);
 
@@ -462,6 +463,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
     MVKIndexMTLBufferBinding ibb = cmdEncoder->getVkGraphics()._indexBuffer;
     if (ibb.vkIndexType == VK_INDEX_TYPE_UINT8) {
         auto* converted = convertUint8IndexBuffer(cmdEncoder, ibb);
+        if ( !converted ) { return; }
         ibb.mtlBuffer = converted->_mtlBuffer;
         ibb.offset = converted->_offset;
     }
@@ -1232,6 +1234,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
     MVKIndexMTLBufferBinding ibb = ibbOrig;
     if (ibb.vkIndexType == VK_INDEX_TYPE_UINT8) {
         auto* converted = convertUint8IndexBuffer(cmdEncoder, ibb);
+        if ( !converted ) { return; }
         ibb.mtlBuffer = converted->_mtlBuffer;
         ibb.offset = converted->_offset;
     }

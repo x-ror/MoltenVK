@@ -1197,7 +1197,7 @@ void MVKCommandEncoder::setComputeBytes(id<MTLComputeCommandEncoder> mtlEncoder,
 // See returnTempMTLBuffersOnCompletion().
 const MVKMTLBufferAllocation* MVKCommandEncoder::getTempMTLBuffer(NSUInteger length, bool isPrivate, bool isDedicated) {
     MVKMTLBufferAllocation* mtlBuffAlloc = getCommandEncodingPool()->acquireMTLBufferAllocation(length, isPrivate, isDedicated);
-	_tempMTLBufferAllocations.push_back(mtlBuffAlloc);
+	if (mtlBuffAlloc) { _tempMTLBufferAllocations.push_back(mtlBuffAlloc); }
     return mtlBuffAlloc;
 }
 
