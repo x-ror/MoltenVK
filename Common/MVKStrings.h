@@ -92,6 +92,9 @@ namespace mvk {
 			setg(p, p, p + n);
 			setp(p, p + n);
 		}
+
+		/** Returns the number of bytes written. */
+		size_t getWrittenSize() const { return pptr() - pbase(); }
 	};
 
 	/** A character counting stream buffer. */

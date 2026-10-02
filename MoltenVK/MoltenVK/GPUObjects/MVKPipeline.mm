@@ -2534,7 +2534,14 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
+	// Advances to the next library that should be written, skipping libraries whose compile failed.
+	bool next() {
+		size_t count = _pSLCache ? _pSLCache->_shaderLibraries.size() : 0;
+		while (++_index < count) {
+			if (_pSLCache->_shaderLibraries[_index].second->isSerializable()) { return true; }
+		}
+		return false;
+	}
 	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
 	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
 	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
@@ -2566,10 +2573,12 @@ VkResult MVKPipelineCache::writeDataImpl(size_t* pDataSize, void* pData) {
 
 		if (pData) {
 			if (*pDataSize >= _dataSize) {
-				mvk::membuf mb((char*)pData, _dataSize);
+				// A library restored from cache data that fails to compile on first use is not written,
+				// so the data may be smaller than _dataSize. Return the number of bytes actually written.
+				mvk::membuf mb((char*)pData, *pDataSize);
 				ostream outStream(&mb);
 				writeData(outStream);
-				*pDataSize = _dataSize;
+				*pDataSize = mb.getWrittenSize();
 				return VK_SUCCESS;
 			} else {
 				*pDataSize = 0;
@@ -2694,10 +2703,11 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					MVKCompressor<std::string> compressedMSL;
 					reader(compressedMSL);
 
-					// Add the shader library to the staging cache.
+					// Add the shader library to the staging cache. The MTLLibrary is compiled
+					// on first use, so creating the cache does not compile every entry up front.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
+					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL, true);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
 
 					break;
 				}

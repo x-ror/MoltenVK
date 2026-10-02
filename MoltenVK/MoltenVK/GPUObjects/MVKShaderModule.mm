@@ -73,6 +73,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 												VkPipelineCreationFeedback* pShaderFeedback,
 												MVKShaderModule* shaderModule) {
 
+	ensureCompiled();
 	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
 
 	// If specialization happens on constants mapped to macros, the function comes from a library
@@ -84,6 +85,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 
 	@autoreleasepool {
 		id<MTLFunction> mtlFunc = getSpecializedMTLFunction(pSpecializationInfo, pShaderFeedback, shaderModule);
+		if (mtlFunc && pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 
 		auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
 		return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
@@ -161,10 +163,12 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 	vector<SpecEntry> specEntries;
 	vector<uint8_t> key;
 
+	// Functions are returned retained and autoreleased while the lock is held, so that clearing
+	// the function cache on another thread cannot release a function before the caller retains it.
 	unique_lock<mutex> lock(_functionsLock);
 	if ( !ensureBaseMTLFunction(pShaderFeedback, shaderModule) ) { return nil; }
-	if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
-	if (_mtlFunctionConstants.count == 0) { return _baseMTLFunction; }
+	if (_mtlFunctionConstants.count == 0) { return [[_baseMTLFunction retain] autorelease]; }
+	string funcName = _shaderConversionResultInfo.entryPoint.mtlFunctionName;
 
 	if (pSpecializationInfo) {
 		specEntries.reserve(pSpecializationInfo->mapEntryCount);
@@ -191,7 +195,7 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 	}
 
 	auto cached = _specializedMTLFunctions.find(key);
-	if (cached != _specializedMTLFunctions.end()) { return cached->second; }
+	if (cached != _specializedMTLFunctions.end()) { return [[cached->second retain] autorelease]; }
 
 	// Compile the specialized function with the lock released, so that other pipelines
 	// can retrieve functions from this library meanwhile.
@@ -203,7 +207,7 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 			[mtlFCVals setConstantValue: se.pData type: se.type atIndex: se.constantID];
 		}
 
-		NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
+		NSString* mtlFuncName = @(funcName.c_str());
 		uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : 0;
 		MVKFunctionSpecializer fs(_owner);
 		mtlFunc = fs.newMTLFunction(_mtlLibrary, mtlFuncName, mtlFCVals);		// retained
@@ -217,14 +221,34 @@ id<MTLFunction> MVKShaderLibrary::getSpecializedMTLFunction(const VkSpecializati
 	}
 	lock.lock();
 
+	// Don't cache a failed specialization, which may have been a transient compiler timeout.
+	if ( !mtlFunc ) { return nil; }
+
+	// If the entry point changed while the lock was released, the function is still correct for
+	// this request, but belongs to a stale cache generation, so return it without caching it.
+	if (funcName != _shaderConversionResultInfo.entryPoint.mtlFunctionName) { return [mtlFunc autorelease]; }
+
 	// If another thread compiled the same specialization meanwhile, use its function.
 	cached = _specializedMTLFunctions.find(key);
 	if (cached != _specializedMTLFunctions.end()) {
 		[mtlFunc release];
-		return cached->second;
+		return [[cached->second retain] autorelease];
 	}
 	_specializedMTLFunctions[std::move(key)] = mtlFunc;
-	return mtlFunc;
+	return [[mtlFunc retain] autorelease];
+}
+
+// Compiles the MTLLibrary if compilation was deferred when this library was restored from pipeline cache data.
+// The deferred flag is cleared only after _mtlLibrary is set, so a reader that sees the flag
+// clear (isSerializable(), or the unlocked check below) also sees the compiled library.
+void MVKShaderLibrary::ensureCompiled() {
+	if ( !_isCompileDeferred ) { return; }
+	lock_guard<mutex> lock(_functionsLock);
+	if ( !_isCompileDeferred ) { return; }
+	string msl;
+	decompressMSL(msl);
+	compileLibrary(msl);
+	_isCompileDeferred = false;
 }
 
 // Releases the cached functions. Called when the entry point changes, and on destruction.
@@ -279,14 +303,17 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 								   const SPIRVToMSLConversionResultInfo& resultInfo,
-								   const MVKCompressor<std::string> compressedMSL,
-								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) :
+								   const MVKCompressor<std::string>& compressedMSL,
+								   const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef,
+								   bool deferCompile) :
 	MVKBaseDeviceObject(owner->getDevice()),
 	_owner(owner),
-	_maySpecializeWithMacro(specializationMacroDef == nullptr) {
+	_maySpecializeWithMacro(specializationMacroDef == nullptr),
+	_isCompileDeferred(deferCompile && !specializationMacroDef) {
 
 	_shaderConversionResultInfo = resultInfo;
 	_compressedMSL = compressedMSL;
+	if (_isCompileDeferred) { return; }
 	string msl;
 	decompressMSL(msl);
 	compileLibrary(msl, specializationMacroDef);
@@ -336,20 +363,28 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 // Macro-specialized variants are owned by the library that created them, so they are not
 // shared with the copy. The copy re-creates any variant it needs on first use.
+// The other library may be compiling on first use on another thread. Its deferred flag is
+// cleared only after its MTLLibrary is set, so read the flag first, and read the MTLLibrary
+// only if the flag is clear. Otherwise the copy stays deferred and compiles its own library.
 MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	MVKBaseDeviceObject(other._device),
 	_owner(other._owner),
-	_maySpecializeWithMacro(other._maySpecializeWithMacro) {
+	_maySpecializeWithMacro(other._maySpecializeWithMacro),
+	_isCompileDeferred(other._isCompileDeferred.load()) {
 
-	_mtlLibrary = [other._mtlLibrary retain];
+	if ( !_isCompileDeferred ) { _mtlLibrary = [other._mtlLibrary retain]; }
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
 }
 
 MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
-	if (_mtlLibrary != other._mtlLibrary) {
+	if (this == &other) { return *this; }
+	clearFunctionCache();
+	_isCompileDeferred = other._isCompileDeferred.load();
+	id<MTLLibrary> otherLib = _isCompileDeferred ? nil : other._mtlLibrary;
+	if (_mtlLibrary != otherLib) {
 		[_mtlLibrary release];
-		_mtlLibrary = [other._mtlLibrary retain];
+		_mtlLibrary = [otherLib retain];
 	}
 	_owner = other._owner;
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
@@ -514,8 +549,9 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 // Adds and returns a new shader library configured from contents read from a pipeline cache.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResultInfo& resultInfo,
-														  const MVKCompressor<std::string> compressedMSL) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
+														  const MVKCompressor<std::string>& compressedMSL,
+														  bool deferCompile) {
+	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL, nullptr, deferCompile);
 	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
 	return shLib;
 }

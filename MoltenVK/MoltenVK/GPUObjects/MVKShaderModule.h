@@ -24,6 +24,7 @@
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <MoltenVKShaderConverter/SPIRVReflection.h>
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -124,11 +125,16 @@ public:
 	/**
 	 * When specializationMacroDef is not null, creates a macro-specialized library
 	 * specializationMacroDef contains (specialization id, value) mappings, should be sorted
+	 *
+	 * When deferCompile is true, the MTLLibrary is not compiled until a function is first
+	 * retrieved from it. This is used for libraries restored from pipeline cache data, most
+	 * of which an app may never use in a given run.
 	 */
 	MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 					 const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-					 const MVKCompressor<std::string> compressedMSL,
-					 const std::vector<std::pair<uint32_t, MVKShaderMacroValue>>* specializationMacroDef = nullptr);
+					 const MVKCompressor<std::string>& compressedMSL,
+					 const std::vector<std::pair<uint32_t, MVKShaderMacroValue>>* specializationMacroDef = nullptr,
+					 bool deferCompile = false);
 
 	MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 					 const void* mslCompiledCodeData,
@@ -149,6 +155,9 @@ protected:
 								  VkPipelineCreationFeedback* pShaderFeedback,
 								  MVKShaderModule* shaderModule);
 	MVKShaderLibrary* getMacroSpecializedVariant(const VkSpecializationInfo* pSpecializationInfo);
+	void ensureCompiled();
+	/** Returns whether this library should be written to pipeline cache data. Libraries whose compile failed are not. */
+	bool isSerializable() const { return _isCompileDeferred || _mtlLibrary; }
 	bool ensureBaseMTLFunction(VkPipelineCreationFeedback* pShaderFeedback, MVKShaderModule* shaderModule);
 	id<MTLFunction> getSpecializedMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 											  VkPipelineCreationFeedback* pShaderFeedback,
@@ -162,12 +171,14 @@ protected:
 	MVKCompressor<std::string>& getCompressedMSL() { return _compressedMSL; }
 
 	MVKVulkanAPIDeviceObject* _owner;
-	id<MTLLibrary> _mtlLibrary;
+	id<MTLLibrary> _mtlLibrary = nil;
 	MVKCompressor<std::string> _compressedMSL;
 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
 
 	/** When true, representing a library created with source, but never specialized */
 	bool _maySpecializeWithMacro;
+	/** When true, the MTLLibrary has not been compiled yet. Cleared by ensureCompiled() after _mtlLibrary is set. */
+	std::atomic<bool> _isCompileDeferred { false };
 	/** Can only be populated when _maySpecializeWithMacro is true. Guarded by _variantsLock. */
 	std::map<std::vector<std::pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary *> _specializationVariants;
 	std::mutex _variantsLock;
@@ -236,7 +247,8 @@ protected:
 									   const mvk::SPIRVToMSLConversionResult& conversionResult);
 	MVKShaderLibrary* addShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
-									   const MVKCompressor<std::string> compressedMSL);
+									   const MVKCompressor<std::string>& compressedMSL,
+									   bool deferCompile);
 	void merge(MVKShaderLibraryCache* other);
 
 	/** A conversion and compilation that is in progress on some thread, with the cache lock released. */
